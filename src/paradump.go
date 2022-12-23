@@ -243,61 +243,91 @@ type columnInfo struct {
 	isNullable   bool
 }
 
+type indexInfo struct {
+	column       []string
+	cardinality  int64
+}
+
 type MetadataTable struct{
 	dbName       string
 	tbName       string
 	cntRows      int64
-	Columns      []string
 	columnInfos  []columnInfo
 	primaryKey   []string
-	Indexes      [][]string
+	Indexes      []indexInfo
 }
+// ------------------------------------------------------------------------------------------
+func GetTableMetadataInfo( adbConn  sql.Conn , dbName string , tableName string ) (MetadataTable,bool) {
+	var result MetadataTable
+	result.dbName=dbName ;
+	result.tbName=tableName ;
 
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	p_err := adbConn.PingContext(ctx)
+	if p_err != nil {
+		log.Fatal("can not ping")
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows , q_err := adbConn.QueryContext(ctx,"select TABLE_ROWS  from information_schema.tables WHERE table_schema = ? AND table_name = ?     ",dbName,tableName)
+	if q_err != nil {
+		log.Fatal("can not query information_schema.tables for %s.%s\n%s",dbName,tableName,q_err)
+	}
+	for q_rows.Next() {
+		err := q_rows.Scan(&result.cntRows)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows , q_err = adbConn.QueryContext(ctx,"select COLUMN_NAME , DATA_TYPE,IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ?     ",dbName,tableName)
+	if q_err != nil {
+		log.Fatal("can not query information_schema.columns for %s.%s\n%s",dbName,tableName,q_err)
+	}
+	for q_rows.Next() {
+		var a_col columnInfo
+		var a_str string
+		err := q_rows.Scan(&a_col.colName,&a_col.colType,&a_str)
+		if err != nil {
+			log.Fatal(err)
+		}
+		a_col.isNullable = (a_str == "YES" )
+		result.columnInfos = append ( result.columnInfos , a_col)
+	}
+
+	/*
+		for allrows.Next() {
+			var v_name string
+
+	*/
+			//        select TABLE_ROWS  from information_schema.tables WHERE table_name = %s    AND table_schema = %s
+			//	select COLUMN_NAME , DATA_TYPE,IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS where table_name=%s and  TABLE_SCHEMA=%s "
+
+
+	//	select COLUMN_NAME  from INFORMATION_SCHEMA.STATISTICS WHERE table_name = %s    AND table_schema = %s and INDEX_NAME = 'PRIMARY' order by SEQ_IN_INDEX
+	//      select COLUMN_NAME,CARDINALITY,INDEX_NAME,SEQ_IN_INDEX  from INFORMATION_SCHEMA.STATISTICS WHERE  table_schema = 'foobar' and table_name = 'client_activity' and INDEX_NAME != 'PRIMARY' order by INDEX_NAME,SEQ_IN_INDEX ;
+
+
+	return result , true
+}
+// ------------------------------------------------------------------------------------------
+func GetMetadataInfo4Tables( adbConn sql.Conn , dbName string , tableNames []string ) ([]MetadataTable,bool) {
+	j := 0
+	var result []MetadataTable
+	for j <len(tableNames)  {
+		info , _ := GetTableMetadataInfo ( adbConn , dbName , tableNames[j] )
+		result = append ( result , info )
+		j++
+	}
+	return result , true
+}
+// ------------------------------------------------------------------------------------------
 
 // ------------------------------------------------------------------------------------------
 
-	
-/*	
-    lckqry = "lock tables test.resynctablelock READ"
-    cursor.execute(lckqry)
-    lckqry = "START TRANSACTION WITH CONSISTENT SNAPSHOT"
-	
 
-	    qry = "SHOW STATUS LIKE 'binlog_snapshot_%'"
-    cursor.execute(qry)
-    r = {}
-    for l in cursor:
-        if l["Variable_name"] == "Binlog_snapshot_file":
-            r["file"] = l["Value"]
-        if l["Variable_name"] == "Binlog_snapshot_position":
-            r["position"] = int(l["Value"])
-    cursor.close()
-    cursor = GetCnxCursor(cnx)
-
-
-
-	
-}
-
-
-func GetArray(arr [5]int) [5]int {
-	arr[2] = 100
-	return arr
-}
-db, err := sql.Open("mysql", "user:password@/dbname")
-if err != nil {
-	panic(err)
-}
-
-
-// See "Important settings" section.
-db.SetConnMaxLifetime(time.Minute * 3)
-db.SetMaxOpenConns(10)
-db.SetMaxIdleConns(10)
-
-    go build -ldflags "-s -w" -v paradump.go
-    env GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -v paradump.go
-*/
 
 // ------------------------------------------------------------------------------------------
 type arrayFlags []string
@@ -329,6 +359,7 @@ func main() {
 	var arg_db_pasw = flag.String("pwd"   , ""             , "the database connection password")
 	var arg_lck_db  = flag.String("lockdb", "test"         , "the lock for sync database name")
 	var arg_lck_tb  = flag.String("locktb", "paradumplock" , "the lock for sync table name")
+	var arg_db      = flag.String("db"    , ""             , "database of tables to dump")
 	// ------------
 	var tables2dump arrayFlags ;
 	flag.Var(&tables2dump,"table", "table to dump")
@@ -338,13 +369,43 @@ func main() {
 		flag.Usage()
 		return
 	}
+	if len(*arg_db) == 0 {
+		flag.Usage()
+		return
+	}
 	// ----------------------------------------------------------------------------------
 	log.Print(tables2dump)
 	conDb , posDb , _ := GetaSynchronizedConnections ( *arg_db_host , *arg_db_port , *arg_db_user , *arg_db_pasw , 10 , *arg_lck_tb , *arg_lck_db )
 	res_check := CheckSessions ( conDb , posDb )
 	log.Printf("CheckSessions => %s", res_check)
 	// ----------------------------------------------------------------------------------
+	r , _ := GetMetadataInfo4Tables ( conDb[0] , *arg_db ,  tables2dump )
+	log.Printf("tables infos  => %s", r)
+	// ----------------------------------------------------------------------------------
+	res_check = CheckSessions ( conDb , posDb )
+	log.Printf("CheckSessions => %s", res_check)
 }
 // ------------------------------------------------------------------------------------------
+//
+// state   1 2 3 4
+//
+// transition  1 - 10
+// transition  1 - 3
+// transition  3 - 4
+// transition  3 - 11
+// transition  2 - 4
+// transition  10 - 2
+// transition  11 - 2
+//
 
+//
+// 1
 
+// 1 - 10 - 2
+// 1 - 3  - 11 - 2
+
+// 1 - 3
+
+// 1 - 10 - 2 - 4
+// 1 - 3  - 4
+// 1 - 3  - 11 - 2 - 4
