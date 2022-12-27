@@ -16,6 +16,11 @@ import (
    ParaDump is a tool that will create a dump of mysql in table , by using multiple threads
    to read tables .
 
+   ------------------------------------------------------------------------------------------
+
+   go build   -ldflags "-s -w" -v paradump.go
+   ./paradump  -host 127.0.0.1 -db foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info
+
    ------------------------------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------------------------------
