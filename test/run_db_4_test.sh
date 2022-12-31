@@ -10,6 +10,19 @@ docker ps -a -q >/dev/null 2>&1 || {
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
 TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
 
+for V in $SRC_DB $TGT_DB
+do
+    NAM=$( echo "$V"| cut -d= -f2)
+
+    IS_RUNNING=$(docker ps -q --filter name=${NAM})
+
+    if [ -n "$IS_RUNNING" ]
+    then
+	echo some docker image is already running
+	exit 1
+    fi
+done
+
 for V in $SRC_DB=4000 $TGT_DB=5000
 do
     IMG=$( echo "$V"| cut -d= -f1)
@@ -44,8 +57,9 @@ do
 done
 for D in dump_*.sql.zstd
 do
-    zstd -dc ${D} | docker exec -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 foobar '
+    ( zstd -dc ${D} | docker exec -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 foobar ' ) &
 done
+wait
 
 #
 #  truncate test.client_info ; truncate test.client_activity ; truncate test.ticket_history ;
@@ -59,4 +73,10 @@ done
 #  use test ; source dump_foobar_ticket_history_1.sql ; source dump_foobar_ticket_history_2.sql ; source dump_foobar_ticket_history_3.sql ;
 #  select count(*) from test.ticket_history ; select count(*) from foobar.ticket_history ; select count(*) from ( select * from test.ticket_history union select * from foobar.ticket_history ) e ;
 #  
+#  select count(*) from client_info ;
+#  select count(*) from (select distinct clientid from client_activity ) e ;
+#
+#  select count(*) from (select distinct ticketid from client_activity ) e ;
+#  select count(*) from (select distinct ticketid from ticket_history ) e ;
+#
 #
