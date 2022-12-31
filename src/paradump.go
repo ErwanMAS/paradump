@@ -386,6 +386,7 @@ func GetMetadataInfo4Tables( adbConn sql.Conn , dbName string , tableNames []str
 type tablechunk struct {
 	table_id  int
 	chunk_id  int64
+	is_done   bool
 	begin_val []string
 	end_val   []string
 }
@@ -452,7 +453,7 @@ func generateEqualityPredicat( pkeyCols []string )  ( string , []int ) {
 	return sql_pred,sql_vals_indices
 }
 // ------------------------------------------------------------------------------------------
-func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2read chan tablechunk , sizeofchunk int ) {
+func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2read chan tablechunk , sizeofchunk int , readers_cnt int ) {
 
 	log.Printf("tableChunkBrowser  start\n")
 
@@ -530,7 +531,9 @@ func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2re
 		log.Printf("table %s end pk ( %s ) : %s\n",sql_full_tab_name,sql_lst_pk_cols , end_pk_row)
 		// --------------------------------------------------------------------------
 		var chunk_id int64 = 0
-		log.Printf("%s\n",reflect.DeepEqual(start_pk_row,end_pk_row))
+		if mode_debug {
+			log.Printf("%s\n",reflect.DeepEqual(start_pk_row,end_pk_row))
+		}
 		for ! reflect.DeepEqual(start_pk_row,end_pk_row) {
 			chunk_id++
 			var a_chunk tablechunk
@@ -538,6 +541,7 @@ func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2re
 			a_chunk.chunk_id=chunk_id
 			a_chunk.begin_val=start_pk_row
 			a_chunk.end_val=end_pk_row
+			a_chunk.is_done=false
 			chunk2read <-  a_chunk
 			// ------------------------------------------------------------------
 			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
@@ -559,10 +563,10 @@ func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2re
 			}
 			if ( mode_debug ) {
 				log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n",sql_full_tab_name,the_finish_query,len(sql_vals_pk),sql_vals_pk,end_pk_row)
+				log.Printf("table %s pk interval : %s -> %s\n",sql_full_tab_name,start_pk_row , end_pk_row)
+				log.Printf("%s\n",reflect.DeepEqual(start_pk_row,end_pk_row))
 			}
 			// ------------------------------------------------------------------
-			// log.Printf("table %s pk interval : %s -> %s\n",sql_full_tab_name,start_pk_row , end_pk_row)
-			// log.Printf("%s\n",reflect.DeepEqual(start_pk_row,end_pk_row))
 		}
 		chunk_id++
 		var a_chunk tablechunk
@@ -570,11 +574,25 @@ func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2re
 		a_chunk.chunk_id=chunk_id
 		a_chunk.begin_val=start_pk_row
 		a_chunk.end_val=end_pk_row
+		a_chunk.is_done=false
 		chunk2read <-  a_chunk
 		// --------------------------------------------------------------------------
 		j++
 	}
 	log.Printf("tableChunkBrowser finish\n")
+	// ----------------------------------------------------------------------------------
+	var a_chunk tablechunk
+	a_chunk.table_id=-1
+	a_chunk.chunk_id=-1
+	a_chunk.begin_val=make([]string, 0 )
+	a_chunk.end_val=make([]string, 0 )
+	a_chunk.is_done=true
+	j=0
+	for  j < readers_cnt {
+		chunk2read <-  a_chunk
+		j++
+	}
+	// ----------------------------------------------------------------------------------
 }
 
 // ------------------------------------------------------------------------------------------
@@ -582,7 +600,6 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 	log.Printf("tableChunkReader[%d] start\n",id)
 
 	var last_tableid int = -1
-	a_chunk := <- chunk2read
 	var sql_cond_lower_pk string
 	var sql_cond_upper_pk string
 	var sql_cond_equal_pk string
@@ -612,7 +629,14 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 		}
 		file_is_empty = append(file_is_empty,true)
 	}
+	a_chunk := <- chunk2read
 	for true {
+		if a_chunk.is_done {
+			if fh != nil {
+                                fh.Close()
+                        }
+			break
+		}
 		if last_tableid != a_chunk.table_id {
 			last_tableid=a_chunk.table_id
 			sql_cond_lower_pk , sql_val_indices_pk =  generatePredicat ( tableInfos[last_tableid].primaryKey , true )
@@ -802,7 +826,7 @@ func main() {
 	wg.Add(1)
 	go func() {
             defer wg.Done()
-            tableChunkBrowser( conDb[0] ,  r , pk_chunks_to_read , *arg_chunk_size )
+            tableChunkBrowser( conDb[0] ,  r , pk_chunks_to_read , *arg_chunk_size , len(conDb)-1)
         }()
 	j := 1
 	for j <len(conDb)  {
