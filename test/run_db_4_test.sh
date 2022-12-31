@@ -34,12 +34,29 @@ do
 	T=$(( $T - 1 ))
     done
     docker exec -i $NAM  sh -c "/usr/bin/mysql  -u root -ptest1234  -h localhost mysql -e \"create database test ; GRANT ALL PRIVILEGES ON test.* TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
-    for F in create_tab_*.sql
+    for DB in foobar test
     do
-	cat $F | docker exec -i $NAM  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 foobar '
+	for F in create_tab_*.sql
+	do
+	    cat $F | docker exec -i $NAM  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 '${DB}
+	done
     done
 done
 for D in dump_*.sql.zstd
 do
     zstd -dc ${D} | docker exec -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 foobar '
 done
+
+#
+#  truncate test.client_info ; truncate test.client_activity ; truncate test.ticket_history ;
+#
+#  use test ; source dump_foobar_client_info_1.sql ; source dump_foobar_client_info_2.sql ; source dump_foobar_client_info_3.sql ;
+#  select count(*) from test.client_info ; select count(*) from foobar.client_info ; select count(*) from ( select * from test.client_info union select * from foobar.client_info ) e ;
+#
+#  use test ; source dump_foobar_client_activity_1.sql ; source dump_foobar_client_activity_2.sql ; source dump_foobar_client_activity_3.sql ;
+#  select count(*) from test.client_activity ; select count(*) from foobar.client_activity ; select count(*) from ( select * from test.client_activity union select * from foobar.client_activity ) e ;
+#
+#  use test ; source dump_foobar_ticket_history_1.sql ; source dump_foobar_ticket_history_2.sql ; source dump_foobar_ticket_history_3.sql ;
+#  select count(*) from test.ticket_history ; select count(*) from foobar.ticket_history ; select count(*) from ( select * from test.ticket_history union select * from foobar.ticket_history ) e ;
+#  
+#
