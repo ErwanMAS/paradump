@@ -482,12 +482,18 @@ func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2re
 		for i, _ := range a_sql_row {
 			ptrs[i] = &a_sql_row[i]
 		}
-
+		row_cnt := 0
 		for q_rows.Next() {
 			err := q_rows.Scan(ptrs...)
 			if err != nil {
 				log.Fatal(err)
 			}
+			row_cnt++
+		}
+		if row_cnt == 0 {
+			log.Printf("table %s is empty \n",sql_full_tab_name)
+			j++
+			continue
 		}
 		start_pk_row := make([]string, c )
 		for n , value := range a_sql_row {
@@ -597,12 +603,14 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 	for i, _ := range a_sql_row {
 		ptrs[i] = &a_sql_row[i]
 	}
+	file_is_empty:= make([]bool,0)
 	for _ , v := range tableInfos {
 		fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",v.dbName),"%t",v.tbName),"%p",strconv.Itoa(id)),os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if fh != nil {
 			fh.Close()
 			fh=nil
 		}
+		file_is_empty = append(file_is_empty,true)
 	}
 	for true {
 		if last_tableid != a_chunk.table_id {
@@ -641,6 +649,11 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 			fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",tableInfos[last_tableid].dbName),"%t",tableInfos[last_tableid].tbName),"%p",strconv.Itoa(id)),os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				log.Fatal(err)
+			}
+			if ( file_is_empty[last_tableid] ) {
+				fh.WriteString("SET NAMES utf8mb4;\n")
+				fh.WriteString("SET TIME_ZONE='+00:00';\n")
+				file_is_empty[last_tableid]=false
 			}
 		}
 		// --------------------------------------------------------------------------

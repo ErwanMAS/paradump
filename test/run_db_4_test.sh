@@ -22,6 +22,7 @@ do
 	exit 1
     fi
 done
+echo creating docker database instances
 
 for V in $SRC_DB=4000 $TGT_DB=5000
 do
@@ -32,7 +33,7 @@ do
 
     docker run --name ${NAM} -p ${PRT}:3306 -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d ${IMG} mysqld  --server-id=${SID} --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW
 done
-
+echo creating database objects
 for V in $SRC_DB=4000 $TGT_DB=5000
 do
     IMG=$( echo "$V"| cut -d= -f1)
@@ -46,20 +47,22 @@ do
         sleep 2
 	T=$(( $T - 1 ))
     done
-    docker exec -i $NAM  sh -c "/usr/bin/mysql  -u root -ptest1234  -h localhost mysql -e \"create database test ; GRANT ALL PRIVILEGES ON test.* TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
+    docker exec  -e MYSQL_PWD=test1234 -i $NAM  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test ; GRANT ALL PRIVILEGES ON test.* TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
     for DB in foobar test
     do
 	for F in create_tab_*.sql
 	do
-	    cat $F | docker exec -i $NAM  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 '${DB}
+	    cat $F | docker exec  -e MYSQL_PWD=test1234 -i $NAM  sh -c '/usr/bin/mysql  -u foobar -h 127.0.0.1 '${DB}
 	done
     done
 done
+echo loading data
 for D in dump_*.sql.zstd
 do
-    ( zstd -dc ${D} | docker exec -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar -ptest1234  -h 127.0.0.1 foobar ' ) &
+    ( zstd -dc ${D} | docker exec  -e MYSQL_PWD=test1234 -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar  -h 127.0.0.1 foobar ' ) &
 done
 wait
+echo done
 
 #
 #  truncate test.client_info ; truncate test.client_activity ; truncate test.ticket_history ;
@@ -79,4 +82,7 @@ wait
 #  select count(*) from (select distinct ticketid from client_activity ) e ;
 #  select count(*) from (select distinct ticketid from ticket_history ) e ;
 #
+#  select count(*) from text_notifications ;
+#
+#  select count(*) from mail_queue ;
 #
