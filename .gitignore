@@ -5,6 +5,8 @@
 *.so
 *.dylib
 
+src/paradump
+
 # Test binary, built with `go test -c`
 *.test
 
