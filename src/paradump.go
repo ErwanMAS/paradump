@@ -596,7 +596,7 @@ func tableChunkBrowser(adbConn  sql.Conn , tableInfos []MetadataTable , chunk2re
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInfos []MetadataTable  , id int , dumpfiletemplate string , insert_size int ) {
+func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInfos []MetadataTable  , id int , dumpfiletemplate string , dumpmode string , insert_size int ) {
 	log.Printf("tableChunkReader[%d] start\n",id)
 
 	var last_tableid int = -1
@@ -622,7 +622,8 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 	}
 	file_is_empty:= make([]bool,0)
 	for _ , v := range tableInfos {
-		fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",v.dbName),"%t",v.tbName),"%p",strconv.Itoa(id)),os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",v.dbName),"%t",v.tbName),"%p",strconv.Itoa(id)),"%m",dumpmode),
+			             os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if fh != nil {
 			fh.Close()
 			fh=nil
@@ -670,11 +671,12 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 			if fh != nil {
 				fh.Close()
 			}
-			fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",tableInfos[last_tableid].dbName),"%t",tableInfos[last_tableid].tbName),"%p",strconv.Itoa(id)),os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",tableInfos[last_tableid].dbName),"%t",tableInfos[last_tableid].tbName),"%p",strconv.Itoa(id)),"%m",dumpmode),
+				             os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				log.Fatal(err)
 			}
-			if ( file_is_empty[last_tableid] ) {
+			if ( file_is_empty[last_tableid] && dumpmode == "sql" ) {
 				fh.WriteString("SET NAMES utf8mb4;\n")
 				fh.WriteString("SET TIME_ZONE='+00:00';\n")
 				file_is_empty[last_tableid]=false
@@ -721,22 +723,39 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 				}
 			}
 			// ------------------------------------------------------------------
-			if row_cnt == 1 {
-				_, err := fh.WriteString(fmt.Sprintf("insert into `%s`(%s) values ", tableInfos[last_tableid].tbName , sql_tab_cols ))
-				if err != nil {
-					log.Fatal(err)
+			if ( dumpmode == "sql" ) {
+				// ----------------------------------------------------------
+				if row_cnt == 1 {
+					_, err := fh.WriteString(fmt.Sprintf("insert into `%s`(%s) values ", tableInfos[last_tableid].tbName , sql_tab_cols ))
+					if err != nil {
+						log.Fatal(err)
+					}
+					fh.WriteString(fmt.Sprintf("("+sql_val_cols+")",a_row...))
+				} else {
+					fh.WriteString(fmt.Sprintf(",("+sql_val_cols+")",a_row...))
 				}
-				fh.WriteString(fmt.Sprintf("("+sql_val_cols+")",a_row...))
-			} else {
-				fh.WriteString(fmt.Sprintf(",("+sql_val_cols+")",a_row...))
+				// ----------------------------------------------------------
+				if row_cnt > insert_size {
+					fh.WriteString(";\n")
+					row_cnt=0
+				}
+				// ----------------------------------------------------------
 			}
 			// ------------------------------------------------------------------
-			if row_cnt > insert_size {
-				fh.WriteString(";\n")
-				row_cnt=0 
+			if ( dumpmode == "csv" ) {
+				// ----------------------------------------------------------
+				if row_cnt == 1 {
+					_, err := fh.WriteString(fmt.Sprintf("%s\n",sql_tab_cols ))
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+				fh.WriteString(fmt.Sprintf(sql_val_cols+"\n",a_row...))
+				// ----------------------------------------------------------
 			}
+			// ------------------------------------------------------------------
 		}
-		if row_cnt > 0 {
+		if ( row_cnt > 0 ) && ( dumpmode == "sql" ) {
 			fh.WriteString(";\n")
 		}
 		if ( mode_debug ) {
@@ -785,7 +804,8 @@ func main() {
 	var arg_insert_size  = flag.Int("insertsize"  , 10                   , "rows count for each insert")	
 	var arg_lck_db       = flag.String("lockdb"   , "test"               , "the lock for sync database name")
 	var arg_lck_tb       = flag.String("locktb"   , "paradumplock"       , "the lock for sync table name")
-	var arg_dumpfile     = flag.String("dumpfile" , "dump_%d_%t_%p.sql"  , "sql dump of tables")
+	var arg_dumpfile     = flag.String("dumpfile" , "dump_%d_%t_%p.%m"   , "sql dump of tables")
+	var arg_dumpmode     = flag.String("dumpmode" , "sql"                , "format of the dump , csv / sql ")
 	var arg_db           = flag.String("db"       , ""                   , "database of tables to dump")
 	// ------------
 	var tables2dump arrayFlags ;
@@ -801,6 +821,10 @@ func main() {
 		return
 	}
 	if len(*arg_dumpfile) == 0 {
+		flag.Usage()
+		return
+	}
+	if len(*arg_dumpmode) != 0 && ( *arg_dumpmode != "sql"  &&  *arg_dumpmode != "csv" ) {
 		flag.Usage()
 		return
 	}
@@ -833,7 +857,7 @@ func main() {
 		wg.Add(1)
 		go func(adbConn sql.Conn ,id int ) {
 			defer wg.Done()
-			tableChunkReader( pk_chunks_to_read ,  adbConn ,  r , id , *arg_dumpfile , *arg_insert_size )
+			tableChunkReader( pk_chunks_to_read ,  adbConn ,  r , id , *arg_dumpfile , *arg_dumpmode,*arg_insert_size )
 		}(conDb[j],j)
 		j++
 		time.Sleep( 5 * time.Millisecond)
