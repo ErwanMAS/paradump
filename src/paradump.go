@@ -269,6 +269,8 @@ type columnInfo struct {
 	colType      string
 	isNullable   bool
 	mustBeQuote  bool
+	haveFract    bool
+	isKindChar   bool
 }
 
 type indexInfo struct {
@@ -311,19 +313,22 @@ func GetTableMetadataInfo( adbConn  sql.Conn , dbName string , tableName string 
 
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows , q_err = adbConn.QueryContext(ctx,"select COLUMN_NAME , DATA_TYPE,IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ?     ",dbName,tableName)
+	q_rows , q_err = adbConn.QueryContext(ctx,"select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ?     ",dbName,tableName)
 	if q_err != nil {
 		log.Fatal("can not query information_schema.columns for %s.%s\n%s",dbName,tableName,q_err)
 	}
 	for q_rows.Next() {
 		var a_col columnInfo
 		var a_str string
-		err := q_rows.Scan(&a_col.colName,&a_col.colType,&a_str)
+		var a_int int
+		err := q_rows.Scan(&a_col.colName,&a_col.colType,&a_str,&a_int)
 		if err != nil {
 			log.Fatal(err)
 		}
 		a_col.isNullable = (a_str == "YES" )
-		a_col.mustBeQuote = ( a_col.colType == "char"||  a_col.colType == "longtext"||  a_col.colType == "mediumtext"||  a_col.colType == "text"||  a_col.colType == "tinytext"||  a_col.colType == "varchar"||  a_col.colType == "date"||  a_col.colType =="datetime"||  a_col.colType =="timestamp" )
+		a_col.mustBeQuote = ( a_col.colType == "char"||  a_col.colType == "longtext"||  a_col.colType == "mediumtext"||  a_col.colType == "text"||  a_col.colType == "tinytext"||  a_col.colType == "varchar"||  a_col.colType == "date"||  a_col.colType =="datetime"|| a_col.colType =="time"|| a_col.colType =="timestamp" )
+		a_col.isKindChar  = ( a_col.colType == "char"||  a_col.colType == "longtext"||  a_col.colType == "mediumtext"||  a_col.colType == "text"||  a_col.colType == "tinytext"||  a_col.colType == "varchar" )
+		a_col.haveFract   = ( a_col.colType =="datetime"||  a_col.colType =="timestamp"||  a_col.colType =="time") && ( a_int > 0 )
 		result.columnInfos = append ( result.columnInfos , a_col)
 	}
 
@@ -615,20 +620,25 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 	var err error
 	a_row := make([]any,0)
 	a_quote_info:= make([]bool,0)
+	a_char_info:= make([]bool,0)
+	a_fract_info:= make([]bool,0)
 	a_sql_row := make([]*sql.NullString,1)
 	ptrs := make([]interface{},1)
 	for i, _ := range a_sql_row {
 		ptrs[i] = &a_sql_row[i]
 	}
 	file_is_empty:= make([]bool,0)
+	file_name:= make([]string,0)
 	for _ , v := range tableInfos {
-		fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",v.dbName),"%t",v.tbName),"%p",strconv.Itoa(id)),"%m",dumpmode),
-			             os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		var fname  string
+		fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",v.dbName),"%t",v.tbName),"%p",strconv.Itoa(id)),"%m",dumpmode)
+		fh,err = os.OpenFile(fname,os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if fh != nil {
 			fh.Close()
 			fh=nil
 		}
 		file_is_empty = append(file_is_empty,true)
+		file_name = append(file_name,fname)
 	}
 	a_chunk := <- chunk2read
 	for true {
@@ -651,7 +661,7 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 				cpk++
 			}
 			sql_tab_cols = fmt.Sprintf("`%s`",tableInfos[last_tableid].columnInfos[0].colName)
-			sql_val_cols = "\"%s\""
+			sql_val_cols = "%s"
 			ctab:=1
 			for ctab < len(tableInfos[last_tableid].columnInfos) {
 				sql_tab_cols = sql_tab_cols + "," + fmt.Sprintf("`%s`",tableInfos[last_tableid].columnInfos[ctab].colName)
@@ -663,22 +673,31 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 			a_sql_row = make([]*sql.NullString,ctab)
 			ptrs = make([]interface{},ctab)
 			a_quote_info= make([]bool,ctab)
+			a_char_info= make([]bool,ctab)
+			a_fract_info= make([]bool,ctab)
 			for i, _ := range a_sql_row {
 				ptrs[i] = &a_sql_row[i]
 				a_quote_info[i]=tableInfos[last_tableid].columnInfos[i].mustBeQuote
+				a_char_info[i]=tableInfos[last_tableid].columnInfos[i].isKindChar
+				a_fract_info[i]=tableInfos[last_tableid].columnInfos[i].haveFract
 			}
 			a_row = make([]any, ctab )
 			if fh != nil {
 				fh.Close()
 			}
-			fh,err = os.OpenFile(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate,"%d",tableInfos[last_tableid].dbName),"%t",tableInfos[last_tableid].tbName),"%p",strconv.Itoa(id)),"%m",dumpmode),
-				             os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			fname := file_name[last_tableid]
+			fh,err = os.OpenFile(fname,os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				log.Fatal(err)
 			}
-			if ( file_is_empty[last_tableid] && dumpmode == "sql" ) {
-				fh.WriteString("SET NAMES utf8mb4;\n")
-				fh.WriteString("SET TIME_ZONE='+00:00';\n")
+			if ( file_is_empty[last_tableid] ) {
+				if ( dumpmode == "sql" ) {
+					fh.WriteString("SET NAMES utf8mb4;\n")
+					fh.WriteString("SET TIME_ZONE='+00:00';\n")
+				}
+				if ( dumpmode == "csv" ) {
+					fh.WriteString(fmt.Sprintf("%s\n",sql_tab_cols ))
+				}
 				file_is_empty[last_tableid]=false
 			}
 		}
@@ -695,35 +714,38 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 			sql_vals_pk = append(sql_vals_pk,generateValuesForPredicat ( sql_val_indices_pk , a_chunk.end_val )...)
 			the_query = &the_reader_interval_query
 		}
-		ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, _ := context.WithTimeout(context.Background(), 16*time.Second)
 		q_rows , q_err := adbConn.QueryContext(ctx,*the_query,sql_vals_pk...)
 		if q_err != nil {
 			log.Printf("table %s chunk id: %d chunk query :  %s \n with %d params\nval for query: %s\n",sql_full_tab_name,a_chunk.chunk_id,*the_query,len(sql_vals_pk),sql_vals_pk)
 			log.Fatalf("can not query table %s to read the chunks\n%s",sql_full_tab_name,sql_vals_pk,q_err.Error())
 		}
+		if ( mode_debug ) {
+			log.Printf("table %s chunk id: %d chunk query :  %s \n with %d params\nval for query: %s\nquote info: %s\n",sql_full_tab_name,a_chunk.chunk_id,*the_query,len(sql_vals_pk),sql_vals_pk,a_quote_info)
+		}
 		row_cnt:=0
 		query_row_count:=0
-		for q_rows.Next() {
-			err := q_rows.Scan(ptrs...)
-			if err != nil {
-				log.Fatal(err)
-			}
-			row_cnt++
-			query_row_count++
-			// ------------------------------------------------------------------
-			for n , value := range a_sql_row {
-				if value == nil {
-					a_row[n]="null"
-				} else {
-					if a_quote_info[n] {
-						a_row[n]=fmt.Sprintf("\"%s\"",value.String)
+		// --------------------------------------------------------------------------
+		if ( dumpmode == "sql" ) {
+			for q_rows.Next() {
+				err := q_rows.Scan(ptrs...)
+				if err != nil {
+					log.Fatal(err)
+				}
+				row_cnt++
+				query_row_count++
+				// ----------------------------------------------------------
+				for n , value := range a_sql_row {
+					if value == nil {
+						a_row[n]="null"
 					} else {
-						a_row[n]= value.String
+						if a_quote_info[n] {
+							a_row[n]=fmt.Sprintf("\"%s\"",value.String)
+						} else {
+							a_row[n]= value.String
+						}
 					}
 				}
-			}
-			// ------------------------------------------------------------------
-			if ( dumpmode == "sql" ) {
 				// ----------------------------------------------------------
 				if row_cnt == 1 {
 					_, err := fh.WriteString(fmt.Sprintf("insert into `%s`(%s) values ", tableInfos[last_tableid].tbName , sql_tab_cols ))
@@ -739,25 +761,53 @@ func tableChunkReader(chunk2read chan tablechunk ,  adbConn  sql.Conn , tableInf
 					fh.WriteString(";\n")
 					row_cnt=0
 				}
-				// ----------------------------------------------------------
 			}
-			// ------------------------------------------------------------------
-			if ( dumpmode == "csv" ) {
+			if row_cnt > 0 {
+				fh.WriteString(";\n")
+			}
+		}
+		// --------------------------------------------------------------------------
+		if ( dumpmode == "csv" ) {
+			for q_rows.Next() {
+				err := q_rows.Scan(ptrs...)
+				if err != nil {
+					log.Fatal(err)
+				}
+				row_cnt++
+				query_row_count++
 				// ----------------------------------------------------------
-				if row_cnt == 1 {
-					_, err := fh.WriteString(fmt.Sprintf("%s\n",sql_tab_cols ))
-					if err != nil {
-						log.Fatal(err)
+				for n , value := range a_sql_row {
+					if value == nil {
+						if a_char_info[n] {
+							a_row[n]="\\N"
+						} else {
+							a_row[n]=""
+						}
+					} else {
+						if a_quote_info[n] && ( ( strings.IndexAny(value.String,"\n,\"") != -1 ) ) {
+							a_row[n]=fmt.Sprintf("\"%s\"",strings.ReplaceAll(value.String,"\"","\"\""))
+						} else if a_fract_info[n] {
+							timeSec, timeFract, dotFound := strings.Cut(value.String,".")
+							if dotFound {
+								timeFract=strings.TrimRight(timeFract,"0")
+								if len(timeFract) == 1 {
+									timeFract=timeFract+"0"
+								}
+								a_row[n]=timeSec+"."+timeFract
+							} else {
+								a_row[n]= value.String
+							}
+					        } else {
+							a_row[n]= value.String
+						}
 					}
 				}
+				// ----------------------------------------------------------
 				fh.WriteString(fmt.Sprintf(sql_val_cols+"\n",a_row...))
 				// ----------------------------------------------------------
 			}
-			// ------------------------------------------------------------------
 		}
-		if ( row_cnt > 0 ) && ( dumpmode == "sql" ) {
-			fh.WriteString(";\n")
-		}
+		// --------------------------------------------------------------------------
 		if ( mode_debug ) {
 			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\nrows cnt: %d\n",sql_full_tab_name,*the_query,len(sql_vals_pk),sql_vals_pk,row_cnt)
 		}
@@ -794,19 +844,19 @@ func (i *arrayFlags) Set(value string) error {
 func main() {
 	log.SetFlags(log.Ldate|log.Lmicroseconds )
 	// ----------------------------------------------------------------------------------
-	var arg_debug        = flag.Bool("debug"      , false                , "debug mode")
-	var arg_db_port      = flag.Int("port"        , 3306                 , "the database port")
-	var arg_db_host      = flag.String("host"     ,"127.0.0.1"           , "the database host")
-	var arg_db_user      = flag.String("user"     , "mysql"              , "the database connection user")
-	var arg_db_pasw      = flag.String("pwd"      , ""                   , "the database connection password")
-	var arg_db_parr      = flag.Int("parallel"    , 10                   , "number of workers")
-	var arg_chunk_size   = flag.Int("chunksize"   , 40                   , "rows count when reading")
-	var arg_insert_size  = flag.Int("insertsize"  , 10                   , "rows count for each insert")	
-	var arg_lck_db       = flag.String("lockdb"   , "test"               , "the lock for sync database name")
-	var arg_lck_tb       = flag.String("locktb"   , "paradumplock"       , "the lock for sync table name")
-	var arg_dumpfile     = flag.String("dumpfile" , "dump_%d_%t_%p.%m"   , "sql dump of tables")
-	var arg_dumpmode     = flag.String("dumpmode" , "sql"                , "format of the dump , csv / sql ")
-	var arg_db           = flag.String("db"       , ""                   , "database of tables to dump")
+	var arg_debug        = flag.Bool("debug"          , false                , "debug mode")
+	var arg_db_port      = flag.Int("port"            , 3306                 , "the database port")
+	var arg_db_host      = flag.String("host"         ,"127.0.0.1"           , "the database host")
+	var arg_db_user      = flag.String("user"         , "mysql"              , "the database connection user")
+	var arg_db_pasw      = flag.String("pwd"          , ""                   , "the database connection password")
+	var arg_db_parr      = flag.Int("parallel"        , 10                   , "number of workers")
+	var arg_chunk_size   = flag.Int("chunksize"       , 40                   , "rows count when reading")
+	var arg_insert_size  = flag.Int("insertsize"      , 10                   , "rows count for each insert")	
+	var arg_lck_db       = flag.String("lockdb"       , "test"               , "the lock for sync database name")
+	var arg_lck_tb       = flag.String("locktb"       , "paradumplock"       , "the lock for sync table name")
+	var arg_dumpfile     = flag.String("dumpfile"     , "dump_%d_%t_%p.%m"   , "sql dump of tables")
+	var arg_dumpmode     = flag.String("dumpmode"     , "sql"                , "format of the dump , csv / sql ")
+	var arg_db           = flag.String("db"           , ""                   , "database of tables to dump")
 	// ------------
 	var tables2dump arrayFlags ;
 	flag.Var(&tables2dump,"table", "table to dump")
@@ -857,7 +907,7 @@ func main() {
 		wg.Add(1)
 		go func(adbConn sql.Conn ,id int ) {
 			defer wg.Done()
-			tableChunkReader( pk_chunks_to_read ,  adbConn ,  r , id , *arg_dumpfile , *arg_dumpmode,*arg_insert_size )
+			tableChunkReader( pk_chunks_to_read ,  adbConn ,  r , id , *arg_dumpfile , *arg_dumpmode, *arg_insert_size )
 		}(conDb[j],j)
 		j++
 		time.Sleep( 5 * time.Millisecond)
