@@ -3,25 +3,32 @@
 cd $(dirname $0)
 
 docker ps -a -q >/dev/null 2>&1 || {
-    echo can not connect to docker
+    echo ERROR can not connect to docker
     exit 1
 }
 
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
 TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
 
+CNT_ERR=0
 for V in $SRC_DB $TGT_DB
 do
     NAM=$( echo "$V"| cut -d= -f2)
 
-    IS_RUNNING=$(docker ps -q --filter name=${NAM})
+    IS_RUNNING=$(docker ps -q -a --filter name=${NAM})
 
     if [ -n "$IS_RUNNING" ]
     then
-	echo some docker image is already running
-	exit 1
+	echo ERROR some docker image is already running
+	docker ps -a --filter name=${NAM}
+	CNT_ERR=$(( CNT_ERR + 1 ))
+	echo
     fi
 done
+if [ $CNT_ERR -gt 0 ]
+then
+    exit 1
+fi
 echo creating docker database instances
 
 for V in $SRC_DB=4000 $TGT_DB=5000
@@ -52,6 +59,7 @@ do
     do
 	for F in create_tab_*.sql
 	do
+	    echo run $F in $DB
 	    cat $F | docker exec  -e MYSQL_PWD=test1234 -i $NAM  sh -c '/usr/bin/mysql  -u foobar -h 127.0.0.1 '${DB}
 	done
     done
@@ -59,6 +67,7 @@ done
 echo loading data
 for D in dump_*.sql.zstd
 do
+    echo loading  $D
     ( zstd -dc ${D} | docker exec  -e MYSQL_PWD=test1234 -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar  -h 127.0.0.1 foobar ' ) &
 done
 wait
