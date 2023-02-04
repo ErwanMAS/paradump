@@ -303,7 +303,7 @@ func GetTableMetadataInfo( adbConn  sql.Conn , dbName string , tableName string 
 
 	q_rows , q_err := adbConn.QueryContext(ctx,"select TABLE_ROWS  from information_schema.tables WHERE table_schema = ? AND table_name = ?     ",dbName,tableName)
 	if q_err != nil {
-		log.Fatal("can not query information_schema.tables for %s.%s\n%s",dbName,tableName,q_err)
+		log.Fatalf("can not query information_schema.tables for %s.%s\n%s",dbName,tableName,q_err)
 	}
 	for q_rows.Next() {
 		err := q_rows.Scan(&result.cntRows)
@@ -316,7 +316,7 @@ func GetTableMetadataInfo( adbConn  sql.Conn , dbName string , tableName string 
 
 	q_rows , q_err = adbConn.QueryContext(ctx,"select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ?     ",dbName,tableName)
 	if q_err != nil {
-		log.Fatal("can not query information_schema.columns for %s.%s\n%s",dbName,tableName,q_err)
+		log.Fatalf("can not query information_schema.columns for %s.%s\n%s",dbName,tableName,q_err)
 	}
 	for q_rows.Next() {
 		var a_col columnInfo
@@ -337,7 +337,7 @@ func GetTableMetadataInfo( adbConn  sql.Conn , dbName string , tableName string 
 
 	q_rows , q_err = adbConn.QueryContext(ctx,"select COLUMN_NAME  from INFORMATION_SCHEMA.STATISTICS WHERE table_schema = ? AND table_name = ?   and INDEX_NAME = 'PRIMARY' order by SEQ_IN_INDEX    ",dbName,tableName)
 	if q_err != nil {
-		log.Fatal("can not query INFORMATION_SCHEMA.STATISTICS  to get primary key info for %s.%s\n%s",dbName,tableName,q_err)
+		log.Fatalf("can not query INFORMATION_SCHEMA.STATISTICS  to get primary key info for %s.%s\n%s",dbName,tableName,q_err)
 	}
 	for q_rows.Next() {
 		var a_str string
@@ -347,12 +347,14 @@ func GetTableMetadataInfo( adbConn  sql.Conn , dbName string , tableName string 
 		}
 		result.primaryKey = append ( result.primaryKey , a_str)
 	}
-
+	if len(result.primaryKey) == 0 {
+		log.Fatalf("table %s.%s has no primary key\n",dbName,tableName)
+	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
 	q_rows , q_err = adbConn.QueryContext(ctx,"select COLUMN_NAME,CARDINALITY,INDEX_NAME  from INFORMATION_SCHEMA.STATISTICS WHERE  table_schema = ? and table_name = ? and INDEX_NAME != 'PRIMARY' order by INDEX_NAME,SEQ_IN_INDEX",dbName,tableName)
 	if q_err != nil {
-		log.Fatal("can not query INFORMATION_SCHEMA.STATISTICS  to get index infos for %s.%s\n%s",dbName,tableName,q_err)
+		log.Fatalf("can not query INFORMATION_SCHEMA.STATISTICS  to get index infos for %s.%s\n%s",dbName,tableName,q_err)
 	}
 	var idx_cur indexInfo
 	for q_rows.Next() {
