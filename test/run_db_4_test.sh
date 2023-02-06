@@ -49,7 +49,7 @@ do
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
-    T=30
+    T=60
     while [ $( docker exec -i $NAM  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' ) -eq 0 -a $T -gt 0 ]
     do
         sleep 2
