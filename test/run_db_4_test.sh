@@ -50,10 +50,15 @@ do
     PRT=$( echo "$V"| cut -d= -f4)
 
     T=60
-    while [ $( docker exec -i $NAM  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' ) -eq 0 -a $T -gt 0 ]
+    C=3
+    while [ $C -gt 0 ]
     do
-        sleep 2
-	T=$(( $T - 1 ))
+	while [ $( docker exec -i $NAM  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' ) -eq 0 -a $T -gt 0 ]
+	do
+	    sleep 2
+	    T=$(( T - 1 ))
+	done
+	C=$(( C -1 ))
     done
     docker exec  -e MYSQL_PWD=test1234 -i $NAM  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test ; GRANT ALL PRIVILEGES ON test.* TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
     for DB in foobar test
