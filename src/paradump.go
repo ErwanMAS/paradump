@@ -427,6 +427,32 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 }
 
 // ------------------------------------------------------------------------------------------
+func GetListTables(adbConn sql.Conn, dbName string) []string {
+	var result []string
+
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	p_err := adbConn.PingContext(ctx)
+	if p_err != nil {
+		log.Fatal("can not ping")
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows, q_err := adbConn.QueryContext(ctx, "select TABLE_name from information_schema.tables WHERE table_schema = ? order by table_name ", dbName)
+	if q_err != nil {
+		log.Fatalf("can not list tables from  information_schema.tables for %s\n%s", dbName, q_err)
+	}
+	for q_rows.Next() {
+		var a_str string
+		err := q_rows.Scan(&a_str)
+		if err != nil {
+			log.Fatal(err)
+		}
+		result = append(result, a_str)
+	}
+	return result
+}
+
+// ------------------------------------------------------------------------------------------
 func GetMetadataInfo4Tables(adbConn sql.Conn, dbName string, tableNames []string, guessPk bool) ([]MetadataTable, bool) {
 	j := 0
 	var result []MetadataTable
@@ -981,7 +1007,7 @@ func main() {
 	arg_db_user := flag.String("user", "mysql", "the database connection user")
 	arg_db_pasw := flag.String("pwd", "", "the database connection password")
 	arg_db_parr := flag.Int("parallel", 10, "number of workers")
-	arg_chunk_size := flag.Int("chunksize", 5000, "rows count when reading")
+	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
 	arg_insert_size := flag.Int("insertsize", 10, "rows count for each insert")
 	arg_lck_db := flag.String("lockdb", "test", "the lock for sync database name")
 	arg_lck_tb := flag.String("locktb", "paradumplock", "the lock for sync table name")
@@ -994,14 +1020,22 @@ func main() {
 	flag.Var(&tables2dump, "table", "table to dump")
 	// ------------
 	arg_guess_pk := flag.Bool("guessprimarykey", false, "guess a primary key in case table does not have one")
+	arg_all_tables := flag.Bool("alltables", false, "all tables of the specified database")
 	// ------------
 	flag.Parse()
 	// ----------------------------------------------------------------------------------
-	if tables2dump == nil {
+	if tables2dump == nil && !*arg_all_tables {
+		log.Printf("no tables specified")
+		flag.Usage()
+		return
+	}
+	if tables2dump != nil && *arg_all_tables {
+		log.Printf("can not use -alltables with -table")
 		flag.Usage()
 		return
 	}
 	if len(*arg_db) == 0 {
+		log.Printf("no database specified")
 		flag.Usage()
 		return
 	}
@@ -1023,11 +1057,14 @@ func main() {
 	}
 	mode_debug = *arg_debug
 	// ----------------------------------------------------------------------------------
-	log.Print(tables2dump)
 	conDb, posDb, _ := GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, *arg_db_parr, *arg_lck_tb, *arg_lck_db)
 	res_check := CheckSessions(conDb, posDb)
 	log.Printf("CheckSessions => %s", res_check)
 	// ----------------------------------------------------------------------------------
+	if tables2dump == nil {
+		tables2dump = GetListTables(conDb[0], *arg_db)
+	}
+	log.Print(tables2dump)
 	r, _ := GetMetadataInfo4Tables(conDb[0], *arg_db, tables2dump, *arg_guess_pk)
 	log.Printf("tables infos  => %s", r)
 	// ----------------------------------------------------------------------------------
