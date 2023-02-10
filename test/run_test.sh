@@ -57,6 +57,9 @@ echo "Test 12: ok ( $? )"
 $BINARY  -db foobar -db test -alltables -port 4000 -pwd test1234 -user foobar  			       >/dev/null 2>&1 && echo "Test 13: failure" && exit 13
 echo "Test 13: ok ( $? )"
 
+#
+# foobar_copy does not exists
+#
 # test 14 , dump ok
 $BINARY  -db foobar -db foobar_copy -alltables -port 4000 -pwd test1234 -user foobar  -guessprimarykey >/dev/null 2>&1 || ( echo "Test 14: failure" && exit 14 )
 echo "Test 14: ok ( $? )"
