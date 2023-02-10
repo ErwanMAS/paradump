@@ -289,6 +289,11 @@ type indexInfo struct {
 	columns     []columnInfo
 }
 
+type aTable struct {
+	dbName         string
+	tbName         string
+}
+
 type MetadataTable struct {
 	dbName         string
 	tbName         string
@@ -427,8 +432,16 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 }
 
 // ------------------------------------------------------------------------------------------
-func GetListTables(adbConn sql.Conn, dbName string) []string {
-	var result []string
+func GetListTables(adbConn sql.Conn, dbNames []string) []aTable {
+	var result []aTable
+	for _, v := range dbNames {
+		result=append(result,GetListTablesBySchema(adbConn,v)[:]...)
+	}
+	return result
+}
+// ------------------------------------------------------------------------------------------
+func GetListTablesBySchema(adbConn sql.Conn, dbName string) []aTable {
+	var result []aTable
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := adbConn.PingContext(ctx)
@@ -447,17 +460,17 @@ func GetListTables(adbConn sql.Conn, dbName string) []string {
 		if err != nil {
 			log.Fatal(err)
 		}
-		result = append(result, a_str)
+		result = append(result, aTable{dbName:dbName,tbName:a_str})
 	}
 	return result
 }
 
 // ------------------------------------------------------------------------------------------
-func GetMetadataInfo4Tables(adbConn sql.Conn, dbName string, tableNames []string, guessPk bool) ([]MetadataTable, bool) {
+func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool) ([]MetadataTable, bool) {
 	j := 0
 	var result []MetadataTable
 	for j < len(tableNames) {
-		info, _ := GetTableMetadataInfo(adbConn, dbName, tableNames[j], guessPk)
+		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk)
 		result = append(result, info)
 		j++
 	}
@@ -1008,52 +1021,59 @@ func main() {
 	arg_db_pasw := flag.String("pwd", "", "the database connection password")
 	arg_db_parr := flag.Int("parallel", 10, "number of workers")
 	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
-	arg_insert_size := flag.Int("insertsize", 10, "rows count for each insert")
+	arg_insert_size := flag.Int("insertsize", 100, "rows count for each insert")
 	arg_lck_db := flag.String("lockdb", "test", "the lock for sync database name")
 	arg_lck_tb := flag.String("locktb", "paradumplock", "the lock for sync table name")
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql ")
 	arg_dumpcompress := flag.String("dumpcompress", "", "which compression format to use , zstd")
-	arg_db := flag.String("db", "", "database of tables to dump")
 	// ------------
-	var tables2dump arrayFlags
-	flag.Var(&tables2dump, "table", "table to dump")
+	var arg_dbs arrayFlags
+	flag.Var(&arg_dbs,"db","database(s) of tables to dump")
+	// ------------
+	var arg_tables2dump arrayFlags
+	flag.Var(&arg_tables2dump, "table", "table to dump")
 	// ------------
 	arg_guess_pk := flag.Bool("guessprimarykey", false, "guess a primary key in case table does not have one")
 	arg_all_tables := flag.Bool("alltables", false, "all tables of the specified database")
 	// ------------
 	flag.Parse()
 	// ----------------------------------------------------------------------------------
-	if tables2dump == nil && !*arg_all_tables {
+	if arg_tables2dump == nil && !*arg_all_tables {
 		log.Printf("no tables specified")
 		flag.Usage()
-		return
+		os.Exit(2)
 	}
-	if tables2dump != nil && *arg_all_tables {
+	if arg_tables2dump != nil && *arg_all_tables {
 		log.Printf("can not use -alltables with -table")
 		flag.Usage()
-		return
+		os.Exit(3)
 	}
-	if len(*arg_db) == 0 {
+	if arg_dbs == nil {
 		log.Printf("no database specified")
 		flag.Usage()
-		return
+		os.Exit(4)
+	}
+	if arg_dbs != nil && len(arg_dbs) > 1 && arg_tables2dump != nil {
+		log.Printf("can not specify multiple databases with a list of tables")
+		flag.Usage()
+		os.Exit(5)
 	}
 	if len(*arg_dumpfile) == 0 {
 		flag.Usage()
-		return
+		os.Exit(6)
 	}
 	if len(*arg_dumpmode) != 0 && (*arg_dumpmode != "sql" && *arg_dumpmode != "csv") {
 		flag.Usage()
-		return
+		os.Exit(7)
 	}
 	if len(*arg_dumpcompress) != 0 && (*arg_dumpcompress != "zstd") {
 		flag.Usage()
-		return
+		os.Exit(8)
 	}
 	if *arg_insert_size > *arg_chunk_size {
 		flag.Usage()
-		return
+		os.Exit(9)
 	}
 	mode_debug = *arg_debug
 	// ----------------------------------------------------------------------------------
@@ -1061,11 +1081,16 @@ func main() {
 	res_check := CheckSessions(conDb, posDb)
 	log.Printf("CheckSessions => %s", res_check)
 	// ----------------------------------------------------------------------------------
-	if tables2dump == nil {
-		tables2dump = GetListTables(conDb[0], *arg_db)
+	var tables2dump []aTable
+	if arg_tables2dump == nil {
+		tables2dump = GetListTables(conDb[0], arg_dbs)
+	} else {
+		for _ , t := range arg_tables2dump {
+			tables2dump = append(tables2dump,aTable{dbName:arg_dbs[0],tbName:t})
+		}
 	}
 	log.Print(tables2dump)
-	r, _ := GetMetadataInfo4Tables(conDb[0], *arg_db, tables2dump, *arg_guess_pk)
+	r, _ := GetMetadataInfo4Tables(conDb[0], tables2dump, *arg_guess_pk)
 	log.Printf("tables infos  => %s", r)
 	// ----------------------------------------------------------------------------------
 	res_check = CheckSessions(conDb, posDb)
