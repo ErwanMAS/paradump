@@ -23,6 +23,10 @@ import (
    ParaDump is a tool that will create a dump of mysql in table , by using multiple threads
    to read tables .
 
+
+   https://mariadb.com/kb/en/enhancements-for-start-transaction-with-consistent-snapshot/
+   https://docs.percona.com/percona-server/5.7/management/start_transaction_with_consistent_snapshot.html#
+
    ------------------------------------------------------------------------------------------
 
    env GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -v paradump.go
@@ -57,39 +61,63 @@ import (
 var mode_debug bool
 
 // ------------------------------------------------------------------------------------------
-func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn, LockTable string, LockDatabase string) {
+type InfoMysqlPosition struct {
+	Name       string
+	Pos        int
+}
+// ------------------------------------------------------------------------------------------
+func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMysqlPosition ) {
+	var ret_val InfoMysqlPosition
 	// --------------------
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := conn.PingContext(ctx)
 	if p_err != nil {
 		log.Fatal("can not ping")
 	}
-	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-	_, e_err := conn.ExecContext(ctx, "START TRANSACTION;")
+	ctx, _ = context.WithTimeout(context.Background(), 20*time.Second)
+	_, e_err := conn.ExecContext(ctx, "FLUSH TABLES;")
 	if e_err != nil {
-		log.Fatal("can not start transaction")
+		log.Fatal("can not flush tables")
 	}
-	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-	_, l_err := conn.ExecContext(ctx, fmt.Sprintf("LOCK TABLES %s.%s WRITE;", LockDatabase, LockTable))
-	if l_err != nil {
-		log.Fatalf("can not lock able in write \n%s\n", l_err.Error())
+	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
+	_, r_err := conn.ExecContext(ctx, "FLUSH TABLES WITH READ LOCK;")
+	if r_err != nil {
+		log.Fatal("can not flush tables")
 	}
 	jobsync <- true
+	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
+	allrows, q_err := conn.QueryContext(ctx, "show master status;")
+	if q_err != nil {
+		log.Fatal("can not get master position")
+	}
+	for allrows.Next() {
+		var v_bin_name string
+		var v_bin_pos  string
+		var v_str_1 string
+		var v_str_2 string
+		var v_str_3 string
+		err := allrows.Scan(&v_bin_name, &v_bin_pos,&v_str_1,&v_str_2,&v_str_3)
+		if err != nil {
+			log.Fatal(err)
+		}
+		ret_val.Name=v_bin_name
+		ret_val.Pos, _ = strconv.Atoi(v_bin_pos)
+	}
 	<-jobsync
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-	_, r_err := conn.ExecContext(ctx, "UNLOCK TABLES;")
-	if r_err != nil {
-		log.Fatalf("can not unlock tabless\n%s\n", r_err.Error())
+	_, u_err := conn.ExecContext(ctx, "UNLOCK TABLES;")
+	if u_err != nil {
+		log.Fatalf("can not unlock tabless\n%s\n", u_err.Error())
 	}
 	jobsync <- true
+	myPos <- ret_val
 }
 
 // ------------------------------------------------------------------------------------------
 type InfoSqlSession struct {
-	Status   bool
-	cnxId    int
-	FileName string
-	FilePos  int
+	Status         bool
+	cnxId          int
+	Position       InfoMysqlPosition
 }
 type StatSqlSession struct {
 	Cnt      int
@@ -97,7 +125,7 @@ type StatSqlSession struct {
 	FilePos  int
 }
 
-func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *sql.Conn, LockTable string, LockDatabase string) {
+func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *sql.Conn, jobstart chan bool , jobsync chan int ) {
 	var ret_val InfoSqlSession
 	ret_val.Status = false
 	ret_val.cnxId = myId
@@ -121,45 +149,54 @@ func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *s
 		infoconn <- ret_val
 		return
 	}
-	log.Printf("start lock read for %d", myId)
-	ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
-	_, l_err := conn.ExecContext(ctx, fmt.Sprintf("LOCK TABLES %s.%s READ;", LockDatabase, LockTable))
+	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
+	_, l_err := conn.ExecContext(ctx, "SET SESSION TRANSACTION ISOLATION LEVEL  REPEATABLE READ ")
 	if l_err != nil {
-		log.Printf("thread %d , can not lock tables in read \n%s\n", myId, l_err.Error())
+		log.Printf("thread %d , can not set REPEATABLE READ for the session\n%s\n", myId, l_err.Error())
 		infoconn <- ret_val
 		return
 	}
+	// -------------------------------------------------------------------------------
+	// we signal we are ready
+	jobsync <- 1
+	log.Printf("thread %d , we are ready\n", myId)
+	// -------------------------------------------------------------------------------
+	// we wait for signal
+	<-jobstart
+	// -------------------------------------------------------------------------------
+	log.Printf("start stransaction for %d", myId)
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 	_, s_err := conn.ExecContext(ctx, "START TRANSACTION WITH CONSISTENT SNAPSHOT;")
 	if s_err != nil {
 		log.Fatalf("can not start transaction with consistent read\n%s\n", s_err.Error())
 	}
-	allrows, q_err := conn.QueryContext(ctx, "SHOW STATUS LIKE 'binlog_snapshot_%';")
+	allrows, q_err := conn.QueryContext(ctx, "show master status;")
 	if q_err != nil {
-		log.Fatal("can not get binlog_snapshot_XX values")
+		log.Fatal("can not get master status ")
 	}
+	jobsync <- 2
+	// -------------------------------------------------------------------------------
 	for allrows.Next() {
-		var v_name string
-		var v_value string
-		err := allrows.Scan(&v_name, &v_value)
+		var v_bin_name string
+		var v_bin_pos  string
+		var v_str_1 string
+		var v_str_2 string
+		var v_str_3 string
+		err := allrows.Scan(&v_bin_name, &v_bin_pos,&v_str_1,&v_str_2,&v_str_3)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if v_name == "Binlog_snapshot_file" {
-			ret_val.FileName = v_value
-		}
-		if v_name == "Binlog_snapshot_position" {
-			ret_val.FilePos, _ = strconv.Atoi(v_value)
-		}
+		ret_val.Position.Name=v_bin_name
+		ret_val.Position.Pos, _ = strconv.Atoi(v_bin_pos)
 	}
-	log.Printf("done start transaction for %d we are at %s@%d", myId, ret_val.FileName, ret_val.FilePos)
+	log.Printf("done start transaction for %d we are at %s@%d ", myId, ret_val.Position.Name, ret_val.Position.Pos)
 	ret_val.Status = true
 	infoconn <- ret_val
 }
 
 // ------------------------------------------------------------------------------------------
-func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, LockTable string, LockDatabase string) ([]sql.Conn, StatSqlSession, error) {
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", DbUsername, DbUserPassword, DbHost, DbPort, LockDatabase))
+func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int,ConDatabase string) ([]sql.Conn, StatSqlSession, error) {
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", DbUsername, DbUserPassword, DbHost, DbPort,ConDatabase))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -177,30 +214,57 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 		}
 		db_conns[i] = first_conn
 	}
-	// --------------------
-	tablelockchan := make(chan bool)
-	startsesschan := make(chan InfoSqlSession, TargetCount*3-1)
-	go LockTableWaitRelease(tablelockchan, db_conns[0], LockTable, LockDatabase)
-	<-tablelockchan
-	log.Print("ok for master lock")
+	// --------------------------------------------------------------------------
+	globallockchan := make(chan bool)
+	globalposchan := make(chan InfoMysqlPosition )
+	resultreadchan := make(chan InfoSqlSession, TargetCount*3-1)
+	startreadchan := make(chan bool , TargetCount*3-1)
+	syncreadchan := make(chan int , TargetCount*3-1)
+	// -------------------------------------------
 	for i := 1; i < TargetCount*3; i++ {
-		go LockTableStartConsistenRead(startsesschan, i, db_conns[i], LockTable, LockDatabase)
+		go LockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan , syncreadchan )
 	}
-	tablelockchan <- true
+	// --------------------
+	// we wait for TargetCount*3-1  feedback - ready to start a transaction
+	for i := 1; i < TargetCount*3; i++ {
+		<- syncreadchan
+	}
+	log.Print("everyone is ready")
+	// --------------------
+	// we start the read lock
+	go LockTableWaitRelease(globallockchan, db_conns[0],globalposchan)
+	<-globallockchan
+	log.Print("ok for global lock")
+	// --------------------
+	// we wake all read
+	for i := 1; i < TargetCount*3; i++ {
+		startreadchan <- true
+	}
+	// --------------------
+	// we wait for TargetCount*3-1  feedback - a read trasnsaction is started
+	for i := 1; i < TargetCount*3; i++ {
+		<- syncreadchan
+	}
+	// --------------------
+	// we release the global lock
+	globallockchan <- true
+	log.Print("ok as for release the global lock")
+	// --------------------------------------------------------------------------
 	var stats_ses []StatSqlSession
 	db_sessions_filepos := make([]InfoSqlSession, TargetCount*3-1)
-	<-tablelockchan
+	<-globallockchan
+	masterpos := <- globalposchan
 	for i := 1; i < TargetCount*3; i++ {
-		db_sessions_filepos[i-1] = <-startsesschan
+		db_sessions_filepos[i-1] = <-resultreadchan
 		foundidx := -1
 		for j := 0; j < len(stats_ses); j++ {
-			if foundidx == -1 && stats_ses[j].FileName == db_sessions_filepos[i-1].FileName && stats_ses[j].FilePos == db_sessions_filepos[i-1].FilePos {
+			if foundidx == -1 && stats_ses[j].FileName == db_sessions_filepos[i-1].Position.Name && stats_ses[j].FilePos == db_sessions_filepos[i-1].Position.Pos {
 				stats_ses[j].Cnt++
 				foundidx = j
 			}
 		}
 		if foundidx == -1 {
-			stats_ses = append(stats_ses, StatSqlSession{Cnt: 1, FileName: db_sessions_filepos[i-1].FileName, FilePos: db_sessions_filepos[i-1].FilePos})
+			stats_ses = append(stats_ses, StatSqlSession{Cnt: 1, FileName: db_sessions_filepos[i-1].Position.Name, FilePos: db_sessions_filepos[i-1].Position.Pos})
 		}
 	}
 	// --------------------
@@ -210,14 +274,21 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	for foundRefPos == -1 && j < len(stats_ses) {
 		if stats_ses[j].Cnt >= TargetCount {
 			foundRefPos = j
-			log.Printf("we choose session with pos %s @ %d", stats_ses[foundRefPos].FileName, stats_ses[foundRefPos].FilePos)
 		}
 		j++
 	}
+	// --------------------
+	log.Printf("we choose session with pos %s@%d", stats_ses[foundRefPos].FileName, stats_ses[foundRefPos].FilePos)
+	log.Printf("master position was %s@%d", masterpos.Name, masterpos.Pos)
+	// --------------------
+	if masterpos.Name != stats_ses[foundRefPos].FileName || stats_ses[foundRefPos].FilePos != masterpos.Pos {
+		log.Fatal(" we choose a session that have a different position than the first session ")
+	}
+	// --------------------
 	var ret_dbconns []sql.Conn
 	if foundRefPos >= 0 {
 		for i := 0; i < TargetCount*3-1; i++ {
-			if db_sessions_filepos[i].FileName == stats_ses[foundRefPos].FileName && db_sessions_filepos[i].FilePos == stats_ses[foundRefPos].FilePos && len(ret_dbconns) < TargetCount {
+			if db_sessions_filepos[i].Position.Name == stats_ses[foundRefPos].FileName && db_sessions_filepos[i].Position.Pos == stats_ses[foundRefPos].FilePos && len(ret_dbconns) < TargetCount {
 				ret_dbconns = append(ret_dbconns, *db_conns[db_sessions_filepos[i].cnxId])
 				db_conns[db_sessions_filepos[i].cnxId] = nil
 			}
@@ -230,47 +301,6 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	}
 	// --------------------
 	return ret_dbconns, stats_ses[foundRefPos], nil
-}
-
-// ------------------------------------------------------------------------------------------
-func CheckSessions(dbConns []sql.Conn, infoPos StatSqlSession) bool {
-	j := 0
-	bug_check := 0
-	for j < len(dbConns) {
-		conn := dbConns[j]
-		// --------------------
-		ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
-		p_err := conn.PingContext(ctx)
-		if p_err != nil {
-			log.Fatal("can not ping")
-		}
-		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-		allrows, q_err := conn.QueryContext(ctx, "SHOW STATUS LIKE 'binlog_snapshot_%';")
-		if q_err != nil {
-			log.Fatal("can not get binlog_snapshot_XX values")
-		}
-		for allrows.Next() {
-			var v_name string
-			var v_value string
-			err := allrows.Scan(&v_name, &v_value)
-			if err != nil {
-				log.Fatal(err)
-			}
-			if v_name == "Binlog_snapshot_file" && infoPos.FileName != v_value {
-				log.Printf(" Binlog_snapshot_file has moved")
-				bug_check++
-			}
-			if v_name == "Binlog_snapshot_position" {
-				a_int, _ := strconv.Atoi(v_value)
-				if infoPos.FilePos != a_int {
-					log.Printf(" Binlog_snapshot_file has moved")
-					bug_check++
-				}
-			}
-		}
-		j++
-	}
-	return bug_check == 0
 }
 
 // ------------------------------------------------------------------------------------------
@@ -298,10 +328,12 @@ type MetadataTable struct {
 	dbName         string
 	tbName         string
 	cntRows        int64
+	storageEng     string
 	columnInfos    []columnInfo
 	primaryKey     []string
 	Indexes        []indexInfo
 	fakePrimaryKey bool
+	onError        int
 }
 
 // ------------------------------------------------------------------------------------------
@@ -310,6 +342,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	result.dbName = dbName
 	result.tbName = tableName
 	result.fakePrimaryKey = false
+	result.onError = 0
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := adbConn.PingContext(ctx)
@@ -318,14 +351,22 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows, q_err := adbConn.QueryContext(ctx, "select TABLE_ROWS  from information_schema.tables WHERE table_schema = ? AND table_name = ?     ", dbName, tableName)
+	q_rows, q_err := adbConn.QueryContext(ctx, "select coalesce(TABLE_ROWS,-1),coalesce(ENGINE,'UNKNOW'),TABLE_TYPE from information_schema.tables WHERE table_schema = ? AND table_name = ?     ", dbName, tableName)
 	if q_err != nil {
 		log.Fatalf("can not query information_schema.tables for %s.%s\n%s", dbName, tableName, q_err)
 	}
 	for q_rows.Next() {
-		err := q_rows.Scan(&result.cntRows)
+		var typeTable string
+		err := q_rows.Scan(&result.cntRows,&result.storageEng,&typeTable)
 		if err != nil {
+			log.Printf("can not query information_schema.tables for %s.%s", dbName, tableName)
 			log.Fatal(err)
+		}
+		if result.storageEng != "InnoDB" {
+			result.onError = result.onError | 4
+		}
+		if typeTable != "BASE TABLE" {
+			result.onError = result.onError | 8
 		}
 	}
 
@@ -399,7 +440,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 
 	if len(result.primaryKey) == 0 {
 		if !guessPk {
-			log.Fatalf("table %s.%s has no primary key\n\nyou may want to use -guessprimarykey\n", dbName, tableName)
+			result.onError=result.onError | 1
 		} else {
 			log.Printf("table %s.%s has no primary key\n", dbName, tableName)
 			// -----------------------------------------------------------------
@@ -418,12 +459,14 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			}
 			// -----------------------------------------------------------------
 			if ix_pos == -1 {
-				log.Fatalf("table %s.%s has no alternative indexes to use a primary key\n", dbName, tableName)
-			}
-			// -----------------------------------------------------------------
-			result.fakePrimaryKey = true
-			for _, colinfo := range result.Indexes[ix_pos].columns {
-				result.primaryKey = append(result.primaryKey, colinfo.colName)
+				result.onError=result.onError | 2
+			} else {
+				// ---------------------------------------------------------
+				result.fakePrimaryKey = true
+				for _, colinfo := range result.Indexes[ix_pos].columns {
+					result.primaryKey = append(result.primaryKey, colinfo.colName)
+				}
+				// ---------------------------------------------------------
 			}
 		}
 	}
@@ -450,7 +493,7 @@ func GetListTablesBySchema(adbConn sql.Conn, dbName string) []aTable {
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows, q_err := adbConn.QueryContext(ctx, "select TABLE_name from information_schema.tables WHERE table_schema = ? order by table_name ", dbName)
+	q_rows, q_err := adbConn.QueryContext(ctx, "select TABLE_name from information_schema.tables WHERE table_schema = ? and TABLE_TYPE='BASE TABLE' order by table_name ", dbName)
 	if q_err != nil {
 		log.Fatalf("can not list tables from  information_schema.tables for %s\n%s", dbName, q_err)
 	}
@@ -473,6 +516,30 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool)
 		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk)
 		result = append(result, info)
 		j++
+	}
+	log.Printf("-------------------")
+	cnt := 0
+	for _ , v := range result {
+		if v.onError & 1 == 1 {
+			log.Printf("table %s.%s has no primary key\n", v.dbName, v.tbName)
+			log.Print("you may want to use -guessprimarykey\n")
+			cnt++
+		}
+		if v.onError & 2 == 2 {
+			log.Printf("table %s.%s has no alternative indexes to use as a primary key\n", v.dbName, v.tbName)
+			cnt++
+		}
+		if v.onError & 4 == 4 {
+			log.Printf("table %s.%s is not a innodb table\n", v.dbName, v.tbName)
+			cnt++
+		}
+		if v.onError & 8 == 8 {
+			log.Printf("table %s.%s is not a regular table\n", v.dbName, v.tbName)
+			cnt++
+		}
+	}
+	if ( cnt > 0 ) {
+		log.Fatalf("to many ERRORS")
 	}
 	return result, true
 }
@@ -1022,8 +1089,6 @@ func main() {
 	arg_db_parr := flag.Int("parallel", 10, "number of workers")
 	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
 	arg_insert_size := flag.Int("insertsize", 100, "rows count for each insert")
-	arg_lck_db := flag.String("lockdb", "test", "the lock for sync database name")
-	arg_lck_tb := flag.String("locktb", "paradumplock", "the lock for sync table name")
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql ")
 	arg_dumpcompress := flag.String("dumpcompress", "", "which compression format to use , zstd")
@@ -1077,9 +1142,7 @@ func main() {
 	}
 	mode_debug = *arg_debug
 	// ----------------------------------------------------------------------------------
-	conDb, posDb, _ := GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, *arg_db_parr, *arg_lck_tb, *arg_lck_db)
-	res_check := CheckSessions(conDb, posDb)
-	log.Printf("CheckSessions => %s", res_check)
+	conDb, _ , _ := GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, *arg_db_parr,arg_dbs[0])
 	// ----------------------------------------------------------------------------------
 	var tables2dump []aTable
 	if arg_tables2dump == nil {
@@ -1092,9 +1155,6 @@ func main() {
 	log.Print(tables2dump)
 	r, _ := GetMetadataInfo4Tables(conDb[0], tables2dump, *arg_guess_pk)
 	log.Printf("tables infos  => %s", r)
-	// ----------------------------------------------------------------------------------
-	res_check = CheckSessions(conDb, posDb)
-	log.Printf("CheckSessions => %s", res_check)
 	// ----------------------------------------------------------------------------------
 	var wg sync.WaitGroup
 	pk_chunks_to_read := make(chan tablechunk, 1000)
@@ -1114,9 +1174,6 @@ func main() {
 		time.Sleep(5 * time.Millisecond)
 	}
 	wg.Wait()
-	// ----------------------------------------------------------------------------------
-	res_check = CheckSessions(conDb, posDb)
-	log.Printf("CheckSessions => %s", res_check)
 	// ----------------------------------------------------------------------------------
 }
 
