@@ -27,6 +27,9 @@ import (
    https://mariadb.com/kb/en/enhancements-for-start-transaction-with-consistent-snapshot/
    https://docs.percona.com/percona-server/5.7/management/start_transaction_with_consistent_snapshot.html#
 
+
+   https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_protocol_compression_algorithms
+
    ------------------------------------------------------------------------------------------
 
    env GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -v paradump.go
