@@ -495,7 +495,21 @@ func GetListTablesBySchema(adbConn sql.Conn, dbName string) []aTable {
 		log.Fatal("can not ping")
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-
+	q_rows, d_err := adbConn.QueryContext(ctx, "SELECT count(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ? ", dbName)
+	if d_err != nil {
+		log.Fatalf("can not query database from  INFORMATION_SCHEMA.SCHEMATA for %s\n%s", dbName, d_err)
+	}
+	for q_rows.Next() {
+		var a_int int
+		err := q_rows.Scan(&a_int)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if a_int == 0 {
+			log.Fatalf(" database '%s' does not exists\n",dbName)
+		}
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 	q_rows, q_err := adbConn.QueryContext(ctx, "select TABLE_name from information_schema.tables WHERE table_schema = ? and TABLE_TYPE='BASE TABLE' order by table_name ", dbName)
 	if q_err != nil {
 		log.Fatalf("can not list tables from  information_schema.tables for %s\n%s", dbName, q_err)
