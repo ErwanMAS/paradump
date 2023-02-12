@@ -80,7 +80,8 @@ func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMys
 	ctx, _ = context.WithTimeout(context.Background(), 20*time.Second)
 	_, e_err := conn.ExecContext(ctx, "FLUSH TABLES;")
 	if e_err != nil {
-		log.Fatal("can not flush tables")
+		log.Print("can not flush tables")
+		log.Fatal("%s",e_err)
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
 	_, r_err := conn.ExecContext(ctx, "FLUSH TABLES WITH READ LOCK;")
@@ -91,7 +92,8 @@ func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMys
 	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
 	allrows, q_err := conn.QueryContext(ctx, "show master status;")
 	if q_err != nil {
-		log.Fatal("can not get master position")
+		log.Print("can not get master position")
+		log.Fatal("%s",q_err)
 	}
 	for allrows.Next() {
 		var v_bin_name string
@@ -358,8 +360,8 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	if q_err != nil {
 		log.Fatalf("can not query information_schema.tables for %s.%s\n%s", dbName, tableName, q_err)
 	}
+	typeTable := "DO_NOT_EXIST"
 	for q_rows.Next() {
-		var typeTable string
 		err := q_rows.Scan(&result.cntRows,&result.storageEng,&typeTable)
 		if err != nil {
 			log.Printf("can not query information_schema.tables for %s.%s", dbName, tableName)
@@ -372,7 +374,9 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			result.onError = result.onError | 8
 		}
 	}
-
+	if typeTable == "DO_NOT_EXIST" {
+		result.onError = result.onError | 16
+	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
 	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ?     ", dbName, tableName)
@@ -537,7 +541,7 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool)
 	log.Printf("-------------------")
 	cnt := 0
 	for _ , v := range result {
-		if v.onError & 1 == 1 {
+		if v.onError & 1 == 1 && ! ( v.onError & 16 == 16 ) {
 			log.Printf("table %s.%s has no primary key\n", v.dbName, v.tbName)
 			log.Print("you may want to use -guessprimarykey\n")
 			cnt++
@@ -554,9 +558,13 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool)
 			log.Printf("table %s.%s is not a regular table\n", v.dbName, v.tbName)
 			cnt++
 		}
+		if v.onError & 16 == 16 {
+			log.Printf("table %s.%s does not exists\n", v.dbName, v.tbName)
+			cnt++
+		}
 	}
 	if ( cnt > 0 ) {
-		log.Fatalf("to many ERRORS")
+		log.Fatalf("too many ERRORS")
 	}
 	return result, true
 }

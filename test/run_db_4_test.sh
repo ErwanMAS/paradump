@@ -61,10 +61,17 @@ do
 	C=$(( C -1 ))
     done
     docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test ; GRANT ALL PRIVILEGES ON test.* TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
+    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
+    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
     docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
     for DB in foobar test
     do
 	for F in create_tab_*.sql
+	do
+	    echo run "$F" in $DB
+	    cat "$F" | docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
+	done
+	for F in create_viw_*.sql
 	do
 	    echo run "$F" in $DB
 	    cat "$F" | docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
