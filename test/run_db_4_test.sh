@@ -38,8 +38,8 @@ do
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
-    docker run --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=2G ||
-	    docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=2G
+    docker run --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G ||
+	    docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G
 done
 echo creating database objects
 for V in $SRC_DB=4000 $TGT_DB=5000
@@ -60,41 +60,60 @@ do
 	done
 	C=$(( C -1 ))
     done
-    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test ; GRANT ALL PRIVILEGES ON test.* TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
+    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
+    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%'; \"  "
     docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
     docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
     docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
-    for DB in foobar test
+    for DB in foobar barfoo test
     do
 	for F in create_tab_*.sql
 	do
-	    echo run "$F" in $DB
+	    echo "run $F in $DB"
 	    cat "$F" | docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
 	done
 	for F in create_viw_*.sql
 	do
-	    echo run "$F" in $DB
+	    echo "run $F in $DB"
 	    cat "$F" | docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
 	done
     done
 done
-echo loading data
-for D in dump_*.sql.zstd
+echo "loading data"
+for DB in foobar barfoo
 do
-    (
-	 echo "loading  $D"
-	 ( time zstd -dc "${D}" | docker exec  -e MYSQL_PWD=test1234 -i  mysql_source  sh -c '/usr/bin/mysql  -u foobar  -h localhost foobar ' ) 2>&1
-    ) | tail -100 &
+    for D in dump_*.sql.zstd
+    do
+	(
+	    echo "loading  $D  on DB $DB"
+	    if [ $DB = "barfoo" ]
+	    then
+		CONTAINER_DST=mysql_target
+	    else
+		CONTAINER_DST=mysql_source
+	    fi
+	    ( time zstd -dc "${D}" | docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST sh -c '/usr/bin/mysql  -u foobar  -h localhost foobar ' ) 2>&1
+	) | tail -100 &
+    done
 done
 wait
 echo "optimize table"
-for D in dump_*.sql.zstd
+for DB in foobar barfoo
 do
-    (
-	T=$(echo "$D" | cut -d_ -f2- | cut -d. -f1)
-	echo optimize  "$T"
-	( time docker exec  -e MYSQL_PWD=test1234 -i  mysql_source  sh -c "/usr/bin/mysql  -u foobar  -h localhost foobar -e 'optimize table $T;' " ) 2>&1
-    ) | tail -100 &
+    for D in dump_*.sql.zstd
+    do
+	(
+	    T=$(echo "$D" | cut -d_ -f2- | cut -d. -f1)
+	    echo "optimize  $T on DB $DB"
+	    if [ $DB = "barfoo" ]
+	    then
+		CONTAINER_DST=mysql_target
+	    else
+		CONTAINER_DST=mysql_source
+	    fi
+	    ( time docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost foobar -e 'optimize table $T;' " ) 2>&1
+	) | tail -100 &
+    done
 done
 wait
 echo "done"

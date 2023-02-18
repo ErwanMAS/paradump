@@ -34,82 +34,93 @@ do
     done
 done
 
+eval
+
+
 
 # test  1 , need args
-eval "$BINARY                                                                                                $DEBUG_CMD " && echo "Test   1: failure" && exit  1
+eval "$BINARY                                                                                                          $DEBUG_CMD " && echo "Test   1: failure" && exit  1
 echo "Test   1: ok ( $? )"
 
 # test  2 , need args
-eval "$BINARY  -db foobar             		   	     		       			             $DEBUG_CMD " && echo "Test   2: failure" && exit  2
+eval "$BINARY  -db foobar             		   	     		       			             	       $DEBUG_CMD " && echo "Test   2: failure" && exit  2
 echo "Test   2: ok ( $? )"
 
 # test  3 , need args
-eval "$BINARY  -db foobar -alltables  		   	     		       			             $DEBUG_CMD " && echo "Test   3: failure" && exit  3
+eval "$BINARY  -db foobar -alltables  		   	     		       			             	       $DEBUG_CMD " && echo "Test   3: failure" && exit  3
 echo "Test   3: ok ( $? )"
 
 # test  4 , need args
-eval "$BINARY  -db foobar -alltables --port 4000 		  	       			             $DEBUG_CMD " && echo "Test   4: failure" && exit  4
+eval "$BINARY  -db foobar -alltables --port 4000 		  	       			             	       $DEBUG_CMD " && echo "Test   4: failure" && exit  4
 echo "Test   4: ok ( $? )"
 
 # test  5 , need args
-eval "$BINARY  -db foobar -alltables  -table client_info 	     		       			     $DEBUG_CMD " && echo "Test   5: failure" && exit  5
+eval "$BINARY  -db foobar -alltables  -table client_info 	     		       			     	       $DEBUG_CMD " && echo "Test   5: failure" && exit  5
 echo "Test   5: ok ( $? )"
 
 # test  6 , need args
-eval "$BINARY  -table client_info            		   	     		       			     $DEBUG_CMD " && echo "Test   6: failure" && exit  6
+eval "$BINARY  -table client_info            		   	     		       			     	       $DEBUG_CMD " && echo "Test   6: failure" && exit  6
 echo "Test   6: ok ( $? )"
 
 # test  7 , need args
-eval "$BINARY  -db foobar -db test -table client_info    	     		       			     $DEBUG_CMD " && echo "Test   7: failure" && exit  7
+eval "$BINARY  -db foobar -db test -table client_info    	     		       			     	       $DEBUG_CMD " && echo "Test   7: failure" && exit  7
 echo "Test   7: ok ( $? )"
 
 # test  8 , need args
-eval "$BINARY  -db foobar -db test                       	     		       			     $DEBUG_CMD " && echo "Test   8: failure" && exit  8
+eval "$BINARY  -db foobar -db test                       	     		       			     	       $DEBUG_CMD " && echo "Test   8: failure" && exit  8
 echo "Test   8: ok ( $? )"
 
 # test  9 , need args
-eval "$BINARY  -db foobar -db test -alltables -dumpfile ''         		       			     $DEBUG_CMD " && echo "Test   9: failure" && exit  9
+eval "$BINARY  -db foobar -db test -alltables -dumpfile ''         		       			     	       $DEBUG_CMD " && echo "Test   9: failure" && exit  9
 echo "Test   9: ok ( $? )"
 
 # test 10 , need args
-eval "$BINARY  -db foobar -db test -alltables -dumpmode 'ods'      		       			     $DEBUG_CMD " && echo "Test  10: failure" && exit 10
+eval "$BINARY  -db foobar -db test -alltables -dumpmode 'ods'      		       			     	       $DEBUG_CMD " && echo "Test  10: failure" && exit 10
 echo "Test  10: ok ( $? )"
 
 # test 11 , need args
-eval "$BINARY  -db foobar -db test -alltables -dumpcompress 'gzip' 		       			     $DEBUG_CMD " && echo "Test  11: failure" && exit 11
+eval "$BINARY  -db foobar -db test -alltables -dumpcompress 'gzip' 		       			     	       $DEBUG_CMD " && echo "Test  11: failure" && exit 11
 echo "Test  11: ok ( $? )"
 
 # test 12 , need args
-eval "$BINARY  -db foobar -db test -alltables -chunksize 40        		       			     $DEBUG_CMD " && echo "Test  12: failure" && exit 12
+eval "$BINARY  -db foobar -db test -alltables -chunksize 40        		       			     	       $DEBUG_CMD " && echo "Test  12: failure" && exit 12
 echo "Test  12: ok ( $? )"
 
 # test 13 , need args
-eval "$BINARY  -db foobar -db test -alltables -port 4000 -pwd test1234 -user foobar  			     $DEBUG_CMD " && echo "Test  13: failure" && exit 13
+eval "$BINARY  -db foobar -db test -alltables -port 4000 -pwd test1234 -user foobar  			     	       $DEBUG_CMD " && echo "Test  13: failure" && exit 13
 echo "Test  13: ok ( $? )"
 
 # test 14 , bad database
-eval "$BINARY  -db foobar -db foobar_copy -alltables -port 4000 -pwd test1234 -user foobar  -guessprimarykey $DEBUG_CMD " && echo "Test  14: failure" && exit 14
+eval "$BINARY  -db foobar -db foobar_copy -alltables -port 4000 -pwd test1234 -user foobar  -guessprimarykey 	       $DEBUG_CMD " && echo "Test  14: failure" && exit 14
 echo "Test  14: ok ( $? )"
 
 # test 15 , bad table
-eval "$BINARY  -db foobar -port 4000 -pwd test1234 -user foobar -table a_very_bad_table                      $DEBUG_CMD " && echo "Test  15: failure" && exit 15
+eval "$BINARY  -db foobar -port 4000 -pwd test1234 -user foobar -table a_very_bad_table                      	       $DEBUG_CMD " && echo "Test  15: failure" && exit 15
 echo "Test  15: ok ( $? )"
 
 # test 16 , not a regular table
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db information_schema -table views   $DEBUG_CMD " && echo "Test  16: failure" && exit 16
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db information_schema -table views   	       $DEBUG_CMD " && echo "Test  16: failure" && exit 16
 echo "Test  16: ok ( $? )"
 
 # test 17 , not a innodb table
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db mysql -table users                $DEBUG_CMD " && echo "Test  17: failure" && exit 17
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db mysql -table users                	       $DEBUG_CMD " && echo "Test  17: failure" && exit 17
 echo "Test  17: ok ( $? )"
 
 # test 18 , not a regular table
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -table client_report       $DEBUG_CMD " && echo "Test  18: failure" && exit 18
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -table client_report       	       $DEBUG_CMD " && echo "Test  18: failure" && exit 18
 echo "Test  18: ok ( $? )"
 
-# test 100  dump whole database csv => count lines
+# test 19 , compression not avaliable for cpy
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar --dumpmode cpy  -dumpcompress zstd $DEBUG_CMD " && echo "Test  19: failure" && exit 19
+echo "Test  19: ok ( $? )"
+
+# test 20 , bad argument
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  20: failure" && exit 20
+echo "Test  20: ok ( $? )"
+
+# test 100  dump whole database csv with no header => count lines
 TMPDIR_T100=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR_T100}/dump_%d_%t_%p.%m $DEBUG_CMD " || ( echo "Test 100: failure" && exit 100 )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile ${TMPDIR_T100}/dump_%d_%t_%p.%m $DEBUG_CMD " || { echo "Test 100: failure" ; exit 100 ; }
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
@@ -118,7 +129,7 @@ do
     do
 	if [ -s $F ]
 	then
-	    CSV_CNT=$(( CSV_CNT - 1 + $( cat $F | wc -l ) ))
+	    CSV_CNT=$(( CSV_CNT + $( cat $F | wc -l ) ))
 	fi
     done
     if [ $CSV_CNT != $( eval "echo \$CNT_$T" ) ]
@@ -132,9 +143,34 @@ then
 fi
 echo "Test 100: ok ( $? )"
 
-# test 101  dump whole database csv / zstd => count lines
+# test 101  dump whole database csv => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -dumpcompress zstd $DEBUG_CMD " || ( echo "Test 101: failure" && exit 101 )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m $DEBUG_CMD " || { echo "Test 101: failure" ; exit 101 ; }
+FAIL=0
+for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+do
+    CSV_CNT=0
+    for F in ${TMPDIR}/dump_foobar_${T}_*.csv
+    do
+	if [ -s $F ]
+	then
+	    CSV_CNT=$(( CSV_CNT - 1 + $( cat $F | wc -l ) ))
+	fi
+    done
+    if [ $CSV_CNT != $( eval "echo \$CNT_$T" ) ]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+if [ $FAIL -gt 0 ]
+then
+    echo "Test 101: failure ($FAIL)" && exit 101
+fi
+echo "Test 101: ok ( $? )"
+
+# test 102  dump whole database csv / zstd => count lines
+TMPDIR=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -dumpcompress zstd $DEBUG_CMD " || { echo "Test 102: failure" ; exit 102 ; }
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
@@ -153,14 +189,14 @@ do
 done
 if [ $FAIL -gt 0 ]
 then
-    echo "Test 101: failure ($FAIL)" && exit 101
+    echo "Test 102: failure ($FAIL)" && exit 102
 fi
-echo "Test 101: ok ( $? )"
+echo "Test 102: ok ( $? )"
 
 
 # test 110  dump whole database sql => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -insertsize 1 $DEBUG_CMD " || ( echo "Test 110: failure" && exit 110 )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -insertsize 1 $DEBUG_CMD " || {  echo "Test 110: failure" ; exit 110 ; }
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
@@ -185,7 +221,7 @@ echo "Test 110: ok ( $? )"
 
 # test 111  dump whole database sql / zstd => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || ( echo "Test 111: failure" && exit 111 )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || { echo "Test 111: failure" ; exit 111 ; }
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
@@ -208,8 +244,8 @@ then
 fi
 echo "Test 111: ok ( $? )"
 
-# test 120  copy whole database sql => count row in foobar_copy
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || ( echo "Test 120: failure" && exit 120 )
+# test 120  copy whole database sql => count rows in foobar
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 120: failure" ; exit 120 ; }
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
@@ -226,19 +262,24 @@ fi
 echo "Test 120: ok ( $? )"
 
 # test 121  dump whole database csv => count lines
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR_T100}/dump_%d_copy_%t_%p.%m $DEBUG_CMD " || ( echo "Test 121: failure" && exit 121 )
+eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile ${TMPDIR_T100}/dump_%d_copy_%t_%p.%m $DEBUG_CMD " || { echo "Test 121: failure" ; exit 121  ; }
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
     DIFF_RES=$(mktemp)
     CNT_LINES_SRC=$(cat ${TMPDIR_T100}/dump_foobar_${T}_*.csv | wc -l )
     CNT_LINES_DST=$(cat ${TMPDIR_T100}/dump_foobar_copy_${T}_*.csv | wc -l )
-    diff -u <( cat ${TMPDIR_T100}/dump_foobar_${T}_*.csv | sort ) <( cat ${TMPDIR_T100}/dump_foobar_copy_${T}_*.csv | sort )  > $DIFF_RES
-    CNT_PLUS=$( grep -c '^+'  $DIFF_RES )
-    CNT_MINUS=$( grep -c '^-'  $DIFF_RES )
-    if [ $CNT_PLUS -gt 0 -o $CNT_MINUS -gt 0 ]
+    if [ $CNT_LINES_SRC -ne $CNT_LINES_DST ]
     then
 	FAIL=$((FAIL+1))
+    else
+	diff -u <( cat ${TMPDIR_T100}/dump_foobar_${T}_*.csv | sort ) <( cat ${TMPDIR_T100}/dump_foobar_copy_${T}_*.csv | sort )  > $DIFF_RES
+	CNT_PLUS=$( grep -c '^+'  $DIFF_RES )
+	CNT_MINUS=$( grep -c '^-'  $DIFF_RES )
+	if [ $CNT_PLUS -gt 0 -o $CNT_MINUS -gt 0 ]
+	then
+	    FAIL=$((FAIL+1))
+	fi
     fi
 done
 if [ $FAIL -gt 0 ]
