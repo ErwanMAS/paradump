@@ -715,8 +715,9 @@ func generateEqualityPredicat(pkeyCols []string) (string, []int) {
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk int64, readers_cnt int) {
+func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64, readers_cnt int) {
 	log.Printf("tableChunkBrowser  start\n")
+	var sizeofchunk int64 = sizeofchunk_init
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := adbConn.PingContext(ctx)
@@ -813,6 +814,9 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 				end_pk_row[n] = value.String
 			}
 			if !tableInfos[j].fakePrimaryKey || !reflect.DeepEqual(start_pk_row, end_pk_row) || pk_cnt < sizeofchunk {
+				if sizeofchunk > sizeofchunk_init && pk_cnt <  sizeofchunk / 2 {
+					sizeofchunk = sizeofchunk / 2
+				}
 				break
 			} else {
 				sizeofchunk = sizeofchunk * 2
