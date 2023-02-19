@@ -421,7 +421,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ?     ", dbName, tableName)
+	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ? order by ORDINAL_POSITION ", dbName, tableName)
 	if q_err != nil {
 		log.Fatalf("can not query information_schema.columns for %s.%s\n%s", dbName, tableName, q_err)
 	}
@@ -857,6 +857,11 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 					end_pk_row[n] = value.String
 				}
 				if !tableInfos[j].fakePrimaryKey || !reflect.DeepEqual(start_pk_row, end_pk_row) || pk_cnt < sizeofchunk {
+					if sizeofchunk > sizeofchunk_init && pk_cnt <  sizeofchunk / 2 {
+						sizeofchunk = sizeofchunk / 2
+						the_finish_query = fmt.Sprintf("select %s,@cnt as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
+							sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
+					}
 					break
 				} else {
 					sizeofchunk = sizeofchunk * 2
