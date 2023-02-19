@@ -786,6 +786,8 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			sql_order_pk_cols = sql_order_pk_cols + fmt.Sprintf("`%s` desc ", v)
 		}
 		var the_finish_query string
+		var prepare_finish_query *sql.Stmt
+		var p_err error
 		var sql_vals_pk []any
 		var end_pk_row []string
 		for {
@@ -796,10 +798,15 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 				the_finish_query = fmt.Sprintf("select %s                   from ( select %s              from %s                          where %s order by %s limit %d ) e order by %s limit 1 ",
 					sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
 			}
+			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+			prepare_finish_query,p_err = adbConn.PrepareContext(ctx,the_finish_query)
+			if p_err != nil {
+				log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query , p_err.Error())
+			}
 			sql_vals_pk = generateValuesForPredicat(sql_val_indices_pk, start_pk_row)
 			log.Printf("table %s query :  %s \n with %d params\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk))
 			ctx, _ = context.WithTimeout(context.Background(), 30*time.Second)
-			q_rows, q_err = adbConn.QueryContext(ctx, the_finish_query, sql_vals_pk...)
+			q_rows, q_err = prepare_finish_query.QueryContext(ctx, sql_vals_pk...)
 			if q_err != nil {
 				log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", sql_full_tab_name, sql_lst_pk_cols, q_err.Error())
 			}
@@ -839,10 +846,10 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			chunk2read <- a_chunk
 			// ------------------------------------------------------------------
 			for {
-				ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+				ctx, _ = context.WithTimeout(context.Background(), 30*time.Second)
 				start_pk_row = end_pk_row
 				sql_vals_pk := generateValuesForPredicat(sql_val_indices_pk, start_pk_row)
-				q_rows, q_err = adbConn.QueryContext(ctx, the_finish_query, sql_vals_pk...)
+				q_rows, q_err = prepare_finish_query.QueryContext(ctx, sql_vals_pk...)
 				if q_err != nil {
 					log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", sql_full_tab_name, sql_lst_pk_cols, q_err.Error())
 				}
@@ -861,12 +868,24 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 						sizeofchunk = sizeofchunk / 2
 						the_finish_query = fmt.Sprintf("select %s,@cnt as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
 							sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
+						_ = prepare_finish_query.Close()
+						ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+						prepare_finish_query,p_err = adbConn.PrepareContext(ctx,the_finish_query)
+						if p_err != nil {
+							log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query , p_err.Error())
+						}
 					}
 					break
 				} else {
 					sizeofchunk = sizeofchunk * 2
 					the_finish_query = fmt.Sprintf("select %s,@cnt as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
 						sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
+					_ = prepare_finish_query.Close()
+					ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+					prepare_finish_query,p_err = adbConn.PrepareContext(ctx,the_finish_query)
+					if p_err != nil {
+						log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query , p_err.Error())
+					}
 				}
 			}
 			if mode_debug {
@@ -886,6 +905,10 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		a_chunk.end_val = end_pk_row
 		a_chunk.is_done = false
 		chunk2read <- a_chunk
+		// --------------------------------------------------------------------------
+		if prepare_finish_query != nil {
+			_ = prepare_finish_query.Close()
+		}
 		// --------------------------------------------------------------------------
 		j++
 	}
@@ -1032,6 +1055,9 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 	var sql_val_cols string
 	var the_reader_interval_query string
 	var the_reader_equality_query string
+	var prepare_reader_interval_query *sql.Stmt
+	var prepare_reader_equality_query *sql.Stmt
+	var p_err error
 	var zst_enc *zstd.Encoder
 	var und_fh *os.File
 	var err error
@@ -1098,6 +1124,24 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 			}
 			the_reader_interval_query = fmt.Sprintf("select %s from %s where ( %s ) and ( %s) order by %s ", sql_tab_cols, sql_full_tab_name, sql_cond_lower_pk, sql_cond_upper_pk, sql_pk_cols)
 			the_reader_equality_query = fmt.Sprintf("select %s from %s where ( %s ) order by %s ", sql_tab_cols, sql_full_tab_name, sql_cond_equal_pk, sql_pk_cols)
+			// ------------------------------------------------------------------
+			if prepare_reader_interval_query != nil {
+				_ = prepare_reader_interval_query.Close()
+			}
+			if prepare_reader_equality_query != nil {
+				_ = prepare_reader_equality_query.Close()
+			}
+			ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+			prepare_reader_interval_query,p_err = adbConn.PrepareContext(ctx,the_reader_interval_query)
+			if p_err != nil {
+				log.Fatalf("can not prepare to read a chunk ( %s )\n%s", the_reader_interval_query , p_err.Error())
+			}
+			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+			prepare_reader_equality_query,p_err = adbConn.PrepareContext(ctx,the_reader_equality_query)
+			if p_err != nil {
+				log.Fatalf("can not prepare to read one pk ( %s )\n%s", the_reader_equality_query , p_err.Error())
+			}
+			// ------------------------------------------------------------------
 			a_sql_row = make([]*sql.NullString, ctab)
 			ptrs = make([]any, ctab)
 			a_quote_info = make([]bool, ctab)
@@ -1147,16 +1191,19 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 		// --------------------------------------------------------------------------
 		var sql_vals_pk []any
 		var the_query *string
+		var prepared_query *sql.Stmt
 		if reflect.DeepEqual(a_chunk.begin_val, a_chunk.end_val) {
 			sql_vals_pk = generateValuesForPredicat(sql_val_indices_equal_pk, a_chunk.begin_val)
 			the_query = &the_reader_equality_query
+			prepared_query = prepare_reader_equality_query
 		} else {
 			sql_vals_pk = generateValuesForPredicat(sql_val_indices_pk, a_chunk.begin_val)
 			sql_vals_pk = append(sql_vals_pk, generateValuesForPredicat(sql_val_indices_pk, a_chunk.end_val)...)
 			the_query = &the_reader_interval_query
+			prepared_query = prepare_reader_interval_query
 		}
 		ctx, _ := context.WithTimeout(context.Background(), 16*time.Second)
-		q_rows, q_err := adbConn.QueryContext(ctx, *the_query, sql_vals_pk...)
+		q_rows, q_err := prepared_query.QueryContext(ctx, sql_vals_pk...)
 		if q_err != nil {
 			log.Printf("table %s chunk id: %d chunk query :  %s \n with %d params\nval for query: %s\n", sql_full_tab_name, a_chunk.chunk_id, *the_query, len(sql_vals_pk), sql_vals_pk)
 			log.Fatalf("can not query table %s to read the chunks\n%s", sql_full_tab_name, sql_vals_pk, q_err.Error())
@@ -1181,6 +1228,14 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 		// --------------------------------------------------------------------------
 		a_chunk = <-chunk2read
 	}
+	// ----------------------------------------------------------------------------------
+	if prepare_reader_interval_query != nil {
+		_ = prepare_reader_interval_query.Close()
+	}
+	if prepare_reader_equality_query != nil {
+		_ = prepare_reader_equality_query.Close()
+	}
+	// ----------------------------------------------------------------------------------
 	log.Printf("tableChunkReader[%d] finish\n", id)
 }
 
