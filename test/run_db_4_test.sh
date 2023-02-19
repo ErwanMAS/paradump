@@ -2,9 +2,15 @@
 
 cd "$(dirname $0)"
 
+NEED_SUDO=""
 docker ps -a -q >/dev/null 2>&1 || {
-    echo ERROR can not connect to docker
-    exit 1
+    echo can not connect to docker
+    echo trying with sudo
+    sudo docker ps -a -q >/dev/null 2>&1 || {
+	echo ERROR can not connect to docker with or without sudo
+	exit 1
+    }
+    NEED_SUDO="sudo"
 }
 
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
@@ -15,12 +21,12 @@ for V in $SRC_DB $TGT_DB
 do
     NAM=$( echo "$V"| cut -d= -f2)
 
-    IS_RUNNING=$(docker ps -q -a --filter name="${NAM}")
+    IS_RUNNING=$($NEED_SUDO docker ps -q -a --filter name="${NAM}")
 
     if [ -n "$IS_RUNNING" ]
     then
 	echo ERROR some docker image is already running
-	docker ps -a --filter name="${NAM}"
+	$NEED_SUDO docker ps -a --filter name="${NAM}"
 	CNT_ERR=$(( CNT_ERR + 1 ))
 	echo
     fi
@@ -38,8 +44,8 @@ do
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
-    docker run --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G ||
-	    docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G
+    $NEED_SUDO docker run --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G ||
+	    $NEED_SUDO docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G
 done
 echo creating database objects
 for V in $SRC_DB=4000 $TGT_DB=5000
@@ -53,29 +59,29 @@ do
     C=3
     while [ $C -gt 0 ]
     do
-	while [ "$( docker exec -i "${NAM}"  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' )" -eq 0 -a "$T" -gt 0 ]
+	while [ "$( $NEED_SUDO docker exec -i "${NAM}"  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' )" -eq 0 -a "$T" -gt 0 ]
 	do
 	    sleep 2
 	    T=$(( T - 1 ))
 	done
 	C=$(( C -1 ))
     done
-    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
-    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%'; \"  "
-    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
-    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
-    docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
+    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
+    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%'; \"  "
+    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
+    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
+    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
     for DB in foobar barfoo test
     do
 	for F in create_tab_*.sql
 	do
 	    echo "run $F in $DB"
-	    cat "$F" | docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
+	    cat "$F" | $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
 	done
 	for F in create_viw_*.sql
 	do
 	    echo "run $F in $DB"
-	    cat "$F" | docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
+	    cat "$F" | $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB}
 	done
     done
 done
@@ -92,7 +98,7 @@ do
 	    else
 		CONTAINER_DST=mysql_source
 	    fi
-	    ( time zstd -dc "${D}" | docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST sh -c '/usr/bin/mysql  -u foobar  -h localhost foobar ' ) 2>&1
+	    ( time zstd -dc "${D}" | $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST sh -c '/usr/bin/mysql  -u foobar  -h localhost foobar ' ) 2>&1
 	) | tail -100 &
     done
 done
@@ -111,7 +117,7 @@ do
 	    else
 		CONTAINER_DST=mysql_source
 	    fi
-	    ( time docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost foobar -e 'optimize table $T;' " ) 2>&1
+	    ( time $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost foobar -e 'optimize table $T;' " ) 2>&1
 	) | tail -100 &
     done
 done

@@ -12,10 +12,23 @@ then
     DEBUG_CMD=""
 fi
 
+NEED_SUDO=""
+docker ps -a -q >/dev/null 2>&1 || {
+    echo can not connect to docker
+    echo trying with sudo
+    sudo docker ps -a -q >/dev/null 2>&1 || {
+	echo ERROR can not connect to docker with or without sudo
+	exit 1
+    }
+    NEED_SUDO="sudo"
+}
+
+DCK_MYSQL="$NEED_SUDO docker run --network=host -i mysql/mysql-server:8.0.31  /usr/bin/mysql"
+
 echo "Init   0:"
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
-    mysql  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1
+    ${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1
 done
 
 echo "Check  0:"
@@ -23,7 +36,7 @@ for port in 5000 4000
 do
     for T in client_activity client_info location_history mail_queue text_notifications ticket_history
     do
-	CNT=$(mysql  -u foobar -ptest1234 --port $port  -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+	CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port $port  -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
 	if [ -z $CNT ]
 	then
 	    echo can cont count from $T
@@ -249,7 +262,7 @@ eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db fooba
 FAIL=0
 for T in client_activity client_info location_history mail_queue text_notifications ticket_history
 do
-    CNT=$(mysql  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [ $CNT != $( eval "echo \$CNT_$T" ) ]
     then
 	FAIL=$((FAIL+1))
