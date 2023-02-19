@@ -793,8 +793,8 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 				the_finish_query = fmt.Sprintf("select %s,@cnt as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
 					sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
 			} else {
-				the_finish_query = fmt.Sprintf("select * from ( select %s from %s where %s order by %s limit %d ) e order by %s limit 1 ",
-					sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
+				the_finish_query = fmt.Sprintf("select %s                   from ( select %s              from %s                          where %s order by %s limit %d ) e order by %s limit 1 ",
+					sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
 			}
 			sql_vals_pk = generateValuesForPredicat(sql_val_indices_pk, start_pk_row)
 			log.Printf("table %s query :  %s \n with %d params\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk))
