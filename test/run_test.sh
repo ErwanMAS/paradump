@@ -180,6 +180,7 @@ then
     echo "Test 101: failure ($FAIL)" && exit 101
 fi
 echo "Test 101: ok ( $? )"
+rm -rf $TMPDIR
 
 # test 102  dump whole database csv / zstd => count lines
 TMPDIR=$(mktemp -d )
@@ -205,6 +206,7 @@ then
     echo "Test 102: failure ($FAIL)" && exit 102
 fi
 echo "Test 102: ok ( $? )"
+rm -rf $TMPDIR
 
 
 # test 110  dump whole database sql => count lines
@@ -231,6 +233,7 @@ then
     echo "Test 110: failure ($FAIL)" && exit 110
 fi
 echo "Test 110: ok ( $? )"
+rm -rf $TMPDIR
 
 # test 111  dump whole database sql / zstd => count lines
 TMPDIR=$(mktemp -d )
@@ -256,6 +259,7 @@ then
     echo "Test 111: failure ($FAIL)" && exit 111
 fi
 echo "Test 111: ok ( $? )"
+rm -rf $TMPDIR
 
 # test 120  copy whole database sql => count rows in foobar
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 120: failure" ; exit 120 ; }
@@ -300,3 +304,4 @@ then
     echo "Test 121: failure ($FAIL)" && exit 121
 fi
 echo "Test 121: ok ( $? )"
+rm -rf $TMPDIR_T100
