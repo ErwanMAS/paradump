@@ -33,7 +33,9 @@ do
     time bash -c "${DCK_MYSQL}dump  -u root -ptest1234  --port $port -h 127.0.0.1  --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --column-statistics=0 foobar > $TMPDIR/mysqldump"
     echo timing mysqlpump
     time bash -c "${DCK_MYSQL}pump  -u root -ptest1234  --port $port -h 127.0.0.1  --skip-add-drop-table --skip-add-locks   --no-create-info --no-create-db          --databases foobar > $TMPDIR/mysqlpump" 
-    echo timing paradump
+    echo timing paradump sql
     time bash -c "$BINARY  -port $port -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m" 
+    echo timing paradump csv
+    time bash -c "$BINARY  -port $port -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m"
 done
 

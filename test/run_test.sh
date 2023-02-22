@@ -25,8 +25,12 @@ docker ps -a -q >/dev/null 2>&1 || {
 
 DCK_MYSQL="$NEED_SUDO docker run --network=host -i mysql/mysql-server:8.0.31  /usr/bin/mysql"
 
+LIST_TABLES='client_activity client_info location_history mail_queue text_notifications ticket_history ticket_tag'
+
+LIST_TABLES_CSV='client_activity client_info location_history mail_queue text_notifications ticket_history'
+
 echo "Init   0:"
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES
 do
     ${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1
 done
@@ -34,7 +38,7 @@ done
 echo "Check  0:"
 for port in 5000 4000
 do
-    for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+    for T in $LIST_TABLES
     do
 	CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port $port  -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
 	if [ -z $CNT ]
@@ -135,7 +139,7 @@ echo "Test  20: ok ( $? )"
 TMPDIR_T100=$(mktemp -d )
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile ${TMPDIR_T100}/dump_%d_%t_%p.%m $DEBUG_CMD " || { echo "Test 100: failure" ; exit 100 ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES_CSV
 do
     CSV_CNT=0
     for F in ${TMPDIR_T100}/dump_foobar_${T}_*.csv
@@ -160,7 +164,7 @@ echo "Test 100: ok ( $? )"
 TMPDIR=$(mktemp -d )
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m $DEBUG_CMD " || { echo "Test 101: failure" ; exit 101 ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES_CSV
 do
     CSV_CNT=0
     for F in ${TMPDIR}/dump_foobar_${T}_*.csv
@@ -186,7 +190,7 @@ rm -rf $TMPDIR
 TMPDIR=$(mktemp -d )
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -dumpcompress zstd $DEBUG_CMD " || { echo "Test 102: failure" ; exit 102 ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES_CSV
 do
     CSV_CNT=0
     for F in ${TMPDIR}/dump_foobar_${T}_*.csv.zstd
@@ -213,7 +217,7 @@ rm -rf $TMPDIR
 TMPDIR=$(mktemp -d )
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -insertsize 1 $DEBUG_CMD " || {  echo "Test 110: failure" ; exit 110 ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES
 do
     SQL_CNT=0
     for F in ${TMPDIR}/dump_foobar_${T}_*.sql
@@ -239,7 +243,7 @@ rm -rf $TMPDIR
 TMPDIR=$(mktemp -d )
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || { echo "Test 111: failure" ; exit 111 ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES
 do
     SQL_CNT=0
     for F in ${TMPDIR}/dump_foobar_${T}_*.sql.zstd
@@ -264,7 +268,7 @@ rm -rf $TMPDIR
 # test 120  copy whole database sql => count rows in foobar
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 120: failure" ; exit 120 ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES
 do
     CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [ $CNT != $( eval "echo \$CNT_$T" ) ]
@@ -272,6 +276,11 @@ do
 	FAIL=$((FAIL+1))
     fi
 done
+CNT_TAG_MATCH=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
+if [ $CNT_TAG_MATCH != $( eval "echo \$CNT_ticket_tag" ) ]
+then
+    FAIL=$((FAIL+1))
+fi
 if [ $FAIL -gt 0 ]
 then
     echo "Test 120: failure ($FAIL)" && exit 120
@@ -281,7 +290,7 @@ echo "Test 120: ok ( $? )"
 # test 121  dump whole database csv => count lines
 eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile ${TMPDIR_T100}/dump_%d_copy_%t_%p.%m $DEBUG_CMD " || { echo "Test 121: failure" ; exit 121  ; }
 FAIL=0
-for T in client_activity client_info location_history mail_queue text_notifications ticket_history
+for T in $LIST_TABLES_CSV
 do
     DIFF_RES=$(mktemp)
     CNT_LINES_SRC=$(cat ${TMPDIR_T100}/dump_foobar_${T}_*.csv | wc -l )

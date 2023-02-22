@@ -44,8 +44,17 @@ do
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
-    $NEED_SUDO docker run --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G ||
-	    $NEED_SUDO docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}" --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=6G
+    if [ $PRT -eq 4000 ]
+    then
+	EXTRA_PARAMS=--innodb_adaptive_hash_index_partitions=8
+    else
+	EXTRA_PARAMS=--innodb_adaptive_hash_index_parts=8
+    fi
+
+    $NEED_SUDO docker run                            --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=12G --max_connections=600 ${EXTRA_PARAMS} --innodb_buffer_pool_instances=8                                  ||
+	$NEED_SUDO docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=12G --max_connections=600 ${EXTRA_PARAMS} --innodb_buffer_pool_instances=8
 done
 echo creating database objects
 for V in $SRC_DB=4000 $TGT_DB=5000
@@ -126,25 +135,3 @@ done
 wait
 echo "done"
 
-#
-#  truncate test.client_info ; truncate test.client_activity ; truncate test.ticket_history ;
-#
-#  use test ; source dump_foobar_client_info_1.sql ; source dump_foobar_client_info_2.sql ; source dump_foobar_client_info_3.sql ;
-#  select count(*) from test.client_info ; select count(*) from foobar.client_info ; select count(*) from ( select * from test.client_info union select * from foobar.client_info ) e ;
-#
-#  use test ; source dump_foobar_client_activity_1.sql ; source dump_foobar_client_activity_2.sql ; source dump_foobar_client_activity_3.sql ;
-#  select count(*) from test.client_activity ; select count(*) from foobar.client_activity ; select count(*) from ( select * from test.client_activity union select * from foobar.client_activity ) e ;
-#
-#  use test ; source dump_foobar_ticket_history_1.sql ; source dump_foobar_ticket_history_2.sql ; source dump_foobar_ticket_history_3.sql ;
-#  select count(*) from test.ticket_history ; select count(*) from foobar.ticket_history ; select count(*) from ( select * from test.ticket_history union select * from foobar.ticket_history ) e ;
-#  
-#  select count(*) from client_info ;
-#  select count(*) from (select distinct clientid from client_activity ) e ;
-#
-#  select count(*) from (select distinct ticketid from client_activity ) e ;
-#  select count(*) from (select distinct ticketid from ticket_history ) e ;
-#
-#  select count(*) from text_notifications ;
-#
-#  select count(*) from mail_queue ;
-#
