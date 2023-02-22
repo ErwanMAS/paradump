@@ -366,12 +366,13 @@ func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassw
 
 // ------------------------------------------------------------------------------------------
 type columnInfo struct {
-	colName     string
-	colType     string
-	isNullable  bool
-	mustBeQuote bool
-	haveFract   bool
-	isKindChar  bool
+	colName       string
+	colType       string
+	isNullable    bool
+	mustBeQuote   bool
+	haveFract     bool
+	isKindChar    bool
+	isKindBinary  bool
 }
 
 type indexInfo struct {
@@ -450,7 +451,8 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		}
 		a_col.isNullable = (a_str == "YES")
 		a_col.isKindChar = (a_col.colType == "char" || a_col.colType == "longtext" || a_col.colType == "mediumtext" || a_col.colType == "text" || a_col.colType == "tinytext" || a_col.colType == "varchar")
-		a_col.mustBeQuote = a_col.isKindChar || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
+		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" )
+		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
 		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_int > 0)
 		result.columnInfos = append(result.columnInfos, a_col)
 	}
