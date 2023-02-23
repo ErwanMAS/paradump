@@ -687,11 +687,12 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool)
 
 // ------------------------------------------------------------------------------------------
 type tablechunk struct {
-	table_id  int
-	chunk_id  int64
-	is_done   bool
-	begin_val []string
-	end_val   []string
+	table_id        int
+	chunk_id        int64
+	is_done         bool
+	begin_val       []string
+	end_val         []string
+	begin_equal_end bool
 }
 
 // ------------------------------------------------------------------------------------------
@@ -890,13 +891,15 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		if mode_debug {
 			log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 		}
-		for !reflect.DeepEqual(start_pk_row, end_pk_row) {
+		begin_equal_end := reflect.DeepEqual(start_pk_row, end_pk_row)
+		for !begin_equal_end {
 			chunk_id++
 			var a_chunk tablechunk
 			a_chunk.table_id = j
 			a_chunk.chunk_id = chunk_id
 			a_chunk.begin_val = start_pk_row
 			a_chunk.end_val = end_pk_row
+			a_chunk.begin_equal_end = begin_equal_end
 			a_chunk.is_done = false
 			chunk2read <- a_chunk
 			// ------------------------------------------------------------------
@@ -943,7 +946,8 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 					log.Printf("table %s pk interval : %s -> %s\n", sql_full_tab_name, start_pk_row, end_pk_row)
 					log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 				}
-				if !tableInfos[j].fakePrimaryKey || !reflect.DeepEqual(start_pk_row, end_pk_row) || pk_cnt < sizeofchunk {
+				begin_equal_end = reflect.DeepEqual(start_pk_row, end_pk_row)
+				if !tableInfos[j].fakePrimaryKey || !begin_equal_end || pk_cnt < sizeofchunk {
 					break
 				} else {
 					sizeofchunk = sizeofchunk * 15 / 10
@@ -966,6 +970,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		a_chunk.chunk_id = chunk_id
 		a_chunk.begin_val = start_pk_row
 		a_chunk.end_val = end_pk_row
+		a_chunk.begin_equal_end = begin_equal_end
 		a_chunk.is_done = false
 		chunk2read <- a_chunk
 		// --------------------------------------------------------------------------
@@ -986,6 +991,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 	a_chunk.chunk_id = -1
 	a_chunk.begin_val = make([]string, 0)
 	a_chunk.end_val = make([]string, 0)
+	a_chunk.begin_equal_end = false
 	a_chunk.is_done = true
 	j = 0
 	for j < readers_cnt {
@@ -1010,7 +1016,6 @@ func ChunkReaderDumpHeader(dumpmode string, cur_iow io.Writer, sql_tab_cols stri
 func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *int, a_quote_info []bool, a_fract_info []bool, a_char_info []bool, a_row []any, a_sql_row []*sql.NullString, a_table_info MetadataTable, sql_tab_cols string, sql_val_cols string, ptrs []any, insert_size int, cur_iow io.Writer, dst_chan chan *string) {
 	// --------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
-		var insert_sql_arr []string
 		//
 		//   0 => insert into (
 		//   1 =>
@@ -1024,7 +1029,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 		//
 		//    4 rows => 4*2+1
 		//
-		insert_sql_arr = make([]string, insert_size*2+1)
+		insert_sql_arr := make([]string, insert_size*2+1)
 		if dumpmode == "cpy" {
 			insert_sql_arr[0] = fmt.Sprintf("insert into `%s`.`%s`(%s) values (", a_table_info.dbName, a_table_info.tbName, sql_tab_cols)
 		} else {
@@ -1046,7 +1051,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 					a_row[n] = "null"
 				} else {
 					if a_quote_info[n] {
-						if a_quote_info[n] && (strings.IndexAny(value.String, "\\\u0000\n\r\"'") != -1) {
+						if a_quote_info[n] && strings.ContainsAny(value.String, "\\\u0000\n\r\"'") {
 							v := strings.ReplaceAll(value.String, "\\", "\\\\")
 							v = strings.ReplaceAll(v, "\u0000", "\\0")
 							v = strings.ReplaceAll(v, "\n", "\\n")
@@ -1108,7 +1113,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 						a_row[n] = ""
 					}
 				} else {
-					if a_quote_info[n] && (strings.IndexAny(value.String, "\n,\"") != -1) {
+					if a_quote_info[n] && strings.ContainsAny(value.String, "\n,\"") {
 						a_row[n] = fmt.Sprintf("\"%s\"", strings.ReplaceAll(value.String, "\"", "\"\""))
 					} else if a_fract_info[n] {
 						timeSec, timeFract, dotFound := strings.Cut(value.String, ".")
@@ -1186,7 +1191,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 		}
 	}
 	a_chunk := <-chunk2read
-	for true {
+	for {
 		if a_chunk.is_done {
 			if und_fh != nil {
 				if zst_enc != nil {
@@ -1199,7 +1204,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 		if last_tableid != a_chunk.table_id {
 			// ------------------------------------------------------------------
 			last_tableid = a_chunk.table_id
-			sql_cond_lower_pk, sql_val_indices_pk = generatePredicat(tableInfos[last_tableid].primaryKey, true)
+			sql_cond_lower_pk, _ = generatePredicat(tableInfos[last_tableid].primaryKey, true)
 			sql_cond_upper_pk, sql_val_indices_pk = generatePredicat(tableInfos[last_tableid].primaryKey, false)
 			sql_cond_equal_pk, sql_val_indices_equal_pk = generateEqualityPredicat(tableInfos[last_tableid].primaryKey)
 			sql_full_tab_name = fmt.Sprintf("`%s`.`%s`", tableInfos[last_tableid].dbName, tableInfos[last_tableid].tbName)
@@ -1289,7 +1294,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 		var sql_vals_pk []any
 		var the_query *string
 		var prepared_query *sql.Stmt
-		if reflect.DeepEqual(a_chunk.begin_val, a_chunk.end_val) {
+		if a_chunk.begin_equal_end {
 			sql_vals_pk = generateValuesForPredicat(sql_val_indices_equal_pk, a_chunk.begin_val)
 			the_query = &the_reader_equality_query
 			prepared_query = prepare_reader_equality_query
@@ -1426,7 +1431,7 @@ func main() {
 		flag.Usage()
 		os.Exit(4)
 	}
-	if arg_dbs != nil && len(arg_dbs) > 1 && arg_tables2dump != nil {
+	if len(arg_dbs) > 1 && arg_tables2dump != nil {
 		log.Printf("can not specify multiple databases with a list of tables")
 		flag.Usage()
 		os.Exit(5)
