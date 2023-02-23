@@ -65,11 +65,12 @@ var mode_debug bool
 
 // ------------------------------------------------------------------------------------------
 type InfoMysqlPosition struct {
-	Name       string
-	Pos        int
+	Name string
+	Pos  int
 }
+
 // ------------------------------------------------------------------------------------------
-func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMysqlPosition ) {
+func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn, myPos chan InfoMysqlPosition) {
 	var ret_val InfoMysqlPosition
 	// --------------------
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
@@ -81,7 +82,7 @@ func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMys
 	_, e_err := conn.ExecContext(ctx, "FLUSH TABLES;")
 	if e_err != nil {
 		log.Print("can not flush tables")
-		log.Fatal("%s",e_err.Error())
+		log.Fatal("%s", e_err.Error())
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
 	_, r_err := conn.ExecContext(ctx, "FLUSH TABLES WITH READ LOCK;")
@@ -93,20 +94,20 @@ func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMys
 	allrows, q_err := conn.QueryContext(ctx, "show master status;")
 	if q_err != nil {
 		log.Print("can not get master position")
-		log.Fatal("%s",q_err.Error())
+		log.Fatal("%s", q_err.Error())
 	}
 	for allrows.Next() {
 		var v_bin_name string
-		var v_bin_pos  string
+		var v_bin_pos string
 		var v_str_1 string
 		var v_str_2 string
 		var v_str_3 string
-		err := allrows.Scan(&v_bin_name, &v_bin_pos,&v_str_1,&v_str_2,&v_str_3)
+		err := allrows.Scan(&v_bin_name, &v_bin_pos, &v_str_1, &v_str_2, &v_str_3)
 		if err != nil {
 			log.Print("can not Scan master position")
 			log.Fatal(err.Error())
 		}
-		ret_val.Name=v_bin_name
+		ret_val.Name = v_bin_name
 		ret_val.Pos, _ = strconv.Atoi(v_bin_pos)
 	}
 	<-jobsync
@@ -121,9 +122,9 @@ func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn , myPos chan InfoMys
 
 // ------------------------------------------------------------------------------------------
 type InfoSqlSession struct {
-	Status         bool
-	cnxId          int
-	Position       InfoMysqlPosition
+	Status   bool
+	cnxId    int
+	Position InfoMysqlPosition
 }
 type StatSqlSession struct {
 	Cnt      int
@@ -131,7 +132,7 @@ type StatSqlSession struct {
 	FilePos  int
 }
 
-func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *sql.Conn, jobstart chan bool , jobsync chan int ) {
+func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *sql.Conn, jobstart chan bool, jobsync chan int) {
 	var ret_val InfoSqlSession
 	ret_val.Status = false
 	ret_val.cnxId = myId
@@ -189,22 +190,22 @@ func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *s
 	}
 	allrows, q_err := conn.QueryContext(ctx, "show master status;")
 	if q_err != nil {
-		log.Fatalf("can not get master status\n%s",q_err.Error())
+		log.Fatalf("can not get master status\n%s", q_err.Error())
 	}
 	jobsync <- 2
 	// -------------------------------------------------------------------------------
 	for allrows.Next() {
 		var v_bin_name string
-		var v_bin_pos  string
+		var v_bin_pos string
 		var v_str_1 string
 		var v_str_2 string
 		var v_str_3 string
-		err := allrows.Scan(&v_bin_name, &v_bin_pos,&v_str_1,&v_str_2,&v_str_3)
+		err := allrows.Scan(&v_bin_name, &v_bin_pos, &v_str_1, &v_str_2, &v_str_3)
 		if err != nil {
 			log.Print("can not Scan master position")
 			log.Fatal(err.Error())
 		}
-		ret_val.Position.Name=v_bin_name
+		ret_val.Position.Name = v_bin_name
 		ret_val.Position.Pos, _ = strconv.Atoi(v_bin_pos)
 	}
 	if mode_debug {
@@ -215,8 +216,8 @@ func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *s
 }
 
 // ------------------------------------------------------------------------------------------
-func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int,ConDatabase string) (*sql.DB,[]sql.Conn, StatSqlSession, error) {
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort,ConDatabase))
+func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []sql.Conn, StatSqlSession, error) {
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
 	if err != nil {
 		log.Print("can not create a mysql object")
 		log.Fatal(err.Error())
@@ -238,23 +239,23 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	}
 	// --------------------------------------------------------------------------
 	globallockchan := make(chan bool)
-	globalposchan := make(chan InfoMysqlPosition )
+	globalposchan := make(chan InfoMysqlPosition)
 	resultreadchan := make(chan InfoSqlSession, TargetCount*3-1)
-	startreadchan := make(chan bool , TargetCount*3-1)
-	syncreadchan := make(chan int , TargetCount*3-1)
+	startreadchan := make(chan bool, TargetCount*3-1)
+	syncreadchan := make(chan int, TargetCount*3-1)
 	// -------------------------------------------
 	for i := 1; i < TargetCount*3; i++ {
-		go LockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan , syncreadchan )
+		go LockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan, syncreadchan)
 	}
 	// --------------------
 	// we wait for TargetCount*3-1  feedback - ready to start a transaction
 	for i := 1; i < TargetCount*3; i++ {
-		<- syncreadchan
+		<-syncreadchan
 	}
 	log.Print("everyone is ready")
 	// --------------------
 	// we start the read lock
-	go LockTableWaitRelease(globallockchan, db_conns[0],globalposchan)
+	go LockTableWaitRelease(globallockchan, db_conns[0], globalposchan)
 	<-globallockchan
 	log.Print("ok for global lock")
 	// --------------------
@@ -265,7 +266,7 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	// --------------------
 	// we wait for TargetCount*3-1  feedback - a read trasnsaction is started
 	for i := 1; i < TargetCount*3; i++ {
-		<- syncreadchan
+		<-syncreadchan
 	}
 	// --------------------
 	// we release the global lock
@@ -275,7 +276,7 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	var stats_ses []StatSqlSession
 	db_sessions_filepos := make([]InfoSqlSession, TargetCount*3-1)
 	<-globallockchan
-	masterpos := <- globalposchan
+	masterpos := <-globalposchan
 	for i := 1; i < TargetCount*3; i++ {
 		db_sessions_filepos[i-1] = <-resultreadchan
 		foundidx := -1
@@ -301,8 +302,8 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	}
 	// --------------------
 	log.Printf("we choose session with pos %s@%d", stats_ses[foundRefPos].FileName, stats_ses[foundRefPos].FilePos)
-	if ( mode_debug ) {
-	        log.Printf("master position was %s@%d", masterpos.Name, masterpos.Pos)
+	if mode_debug {
+		log.Printf("master position was %s@%d", masterpos.Name, masterpos.Pos)
 	}
 	// --------------------
 	if masterpos.Name != stats_ses[foundRefPos].FileName || stats_ses[foundRefPos].FilePos != masterpos.Pos {
@@ -324,12 +325,12 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 		}
 	}
 	// --------------------
-	return db,ret_dbconns, stats_ses[foundRefPos], nil
+	return db, ret_dbconns, stats_ses[foundRefPos], nil
 }
 
 // ------------------------------------------------------------------------------------------
-func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int,ConDatabase string) (*sql.DB,[]sql.Conn, error) {
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort,ConDatabase))
+func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []sql.Conn, error) {
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
 	if err != nil {
 		log.Print("can not create a mysql object")
 		log.Fatal(err.Error())
@@ -361,18 +362,18 @@ func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassw
 
 	}
 	// --------------------
-	return db,db_conns, nil
+	return db, db_conns, nil
 }
 
 // ------------------------------------------------------------------------------------------
 type columnInfo struct {
-	colName       string
-	colType       string
-	isNullable    bool
-	mustBeQuote   bool
-	haveFract     bool
-	isKindChar    bool
-	isKindBinary  bool
+	colName      string
+	colType      string
+	isNullable   bool
+	mustBeQuote  bool
+	haveFract    bool
+	isKindChar   bool
+	isKindBinary bool
 }
 
 type indexInfo struct {
@@ -382,8 +383,8 @@ type indexInfo struct {
 }
 
 type aTable struct {
-	dbName         string
-	tbName         string
+	dbName string
+	tbName string
 }
 
 type MetadataTable struct {
@@ -409,7 +410,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := adbConn.PingContext(ctx)
 	if p_err != nil {
-		log.Fatalf("can not ping\n%s",p_err.Error())
+		log.Fatalf("can not ping\n%s", p_err.Error())
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
@@ -419,7 +420,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	}
 	typeTable := "DO_NOT_EXIST"
 	for q_rows.Next() {
-		err := q_rows.Scan(&result.cntRows,&result.storageEng,&typeTable)
+		err := q_rows.Scan(&result.cntRows, &result.storageEng, &typeTable)
 		if err != nil {
 			log.Printf("can not query information_schema.tables for %s.%s", dbName, tableName)
 			log.Fatal(err.Error())
@@ -451,7 +452,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		}
 		a_col.isNullable = (a_str == "YES")
 		a_col.isKindChar = (a_col.colType == "char" || a_col.colType == "longtext" || a_col.colType == "mediumtext" || a_col.colType == "text" || a_col.colType == "tinytext" || a_col.colType == "varchar")
-		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" || a_col.colType == "bit" )
+		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" || a_col.colType == "bit")
 		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
 		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_int > 0)
 		result.columnInfos = append(result.columnInfos, a_col)
@@ -487,7 +488,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 
 		err := q_rows.Scan(&a_col_name, &a_cardina, &a_idx_name)
 		if err != nil {
-			log.Printf("can not scan indexes informations for %s.%s",dbName, tableName)
+			log.Printf("can not scan indexes informations for %s.%s", dbName, tableName)
 			log.Fatal(err.Error())
 		}
 		if len(idx_cur.idxName) != 0 && idx_cur.idxName != a_idx_name {
@@ -505,7 +506,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			}
 		}
 		if mode_debug {
-			log.Printf("idx_cur %s",idx_cur)
+			log.Printf("idx_cur %s", idx_cur)
 		}
 	}
 	if len(idx_cur.idxName) != 0 {
@@ -514,15 +515,15 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 
 	if len(result.primaryKey) == 0 {
 		if !guessPk {
-			result.onError=result.onError | 1
+			result.onError = result.onError | 1
 		} else {
 			log.Printf("table %s.%s has no primary key\n", dbName, tableName)
 			if mode_debug {
 				log.Printf("table info is :")
-				log.Printf("t.dbName         : %s",result.dbName)
-				log.Printf("t.tbName         : %s",result.tbName)
-				log.Printf("t.cntRows        : %s",result.cntRows)
-				log.Printf("t.storageEng     : %s",result.storageEng)
+				log.Printf("t.dbName         : %s", result.dbName)
+				log.Printf("t.tbName         : %s", result.tbName)
+				log.Printf("t.cntRows        : %s", result.cntRows)
+				log.Printf("t.storageEng     : %s", result.storageEng)
 				var a_str string
 				for _, v := range result.columnInfos {
 					if len(a_str) == 0 {
@@ -531,10 +532,10 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 						a_str = a_str + " , " + v.colName
 					}
 				}
-				log.Printf("t.columnInfos    : [ %s ] ",a_str)
-				log.Printf("t.primaryKey     : %s",result.primaryKey)
+				log.Printf("t.columnInfos    : [ %s ] ", a_str)
+				log.Printf("t.primaryKey     : %s", result.primaryKey)
 				log.Printf("t.Indexes        : ")
-				for _ , i := range result.Indexes {
+				for _, i := range result.Indexes {
 					var a_str string
 					for _, v := range i.columns {
 						if len(a_str) == 0 {
@@ -543,10 +544,10 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 							a_str = a_str + " , " + v.colName
 						}
 					}
-					log.Printf("         -  %9d [ %s ] %s ",i.cardinality,a_str,i.idxName )
+					log.Printf("         -  %9d [ %s ] %s ", i.cardinality, a_str, i.idxName)
 				}
-				log.Printf("t.fakePrimaryKey : %s",result.fakePrimaryKey)
-				log.Printf("t.onError        : %s",result.onError)
+				log.Printf("t.fakePrimaryKey : %s", result.fakePrimaryKey)
+				log.Printf("t.onError        : %s", result.onError)
 			}
 			// -----------------------------------------------------------------
 			var max_cardinality int64
@@ -564,11 +565,11 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			}
 			// -----------------------------------------------------------------
 			if ix_pos == -1 {
-				result.onError=result.onError | 2
+				result.onError = result.onError | 2
 			} else {
 				// ---------------------------------------------------------
 				if mode_debug {
-					log.Printf("we choose index %d",ix_pos)
+					log.Printf("we choose index %d", ix_pos)
 				}
 				result.fakePrimaryKey = true
 				for _, colinfo := range result.Indexes[ix_pos].columns {
@@ -583,21 +584,22 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 }
 
 // ------------------------------------------------------------------------------------------
-func GetListTables(adbConn sql.Conn, dbNames []string , tab2exclude []string ) []aTable {
+func GetListTables(adbConn sql.Conn, dbNames []string, tab2exclude []string) []aTable {
 	var result []aTable
 	for _, v := range dbNames {
-		result=append(result,GetListTablesBySchema(adbConn,v,tab2exclude)[:]...)
+		result = append(result, GetListTablesBySchema(adbConn, v, tab2exclude)[:]...)
 	}
 	return result
 }
+
 // ------------------------------------------------------------------------------------------
-func GetListTablesBySchema(adbConn sql.Conn, dbName string,tab2exclude []string ) []aTable {
+func GetListTablesBySchema(adbConn sql.Conn, dbName string, tab2exclude []string) []aTable {
 	var result []aTable
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := adbConn.PingContext(ctx)
 	if p_err != nil {
-		log.Fatalf("can not ping\n%s",p_err.Error())
+		log.Fatalf("can not ping\n%s", p_err.Error())
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 	q_rows, d_err := adbConn.QueryContext(ctx, "SELECT count(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ? ", dbName)
@@ -612,7 +614,7 @@ func GetListTablesBySchema(adbConn sql.Conn, dbName string,tab2exclude []string 
 			log.Fatal(err.Error())
 		}
 		if a_int == 0 {
-			log.Fatalf(" database '%s' does not exists\n",dbName)
+			log.Fatalf(" database '%s' does not exists\n", dbName)
 		}
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
@@ -627,18 +629,18 @@ func GetListTablesBySchema(adbConn sql.Conn, dbName string,tab2exclude []string 
 			log.Print("can not scan table informations")
 			log.Fatal(err.Error())
 		}
-		result = append(result, aTable{dbName:dbName,tbName:a_str})
+		result = append(result, aTable{dbName: dbName, tbName: a_str})
 	}
-	for _ , patexc := range tab2exclude {
+	for _, patexc := range tab2exclude {
 		var result_flt []aTable
-		for _ , tab := range result {
-			if  strings.Index(tab.dbName+"."+tab.tbName,patexc) > 0 {
-				log.Printf("%s.%s is excluded because match with %s",tab.dbName,tab.tbName,patexc)
+		for _, tab := range result {
+			if strings.Index(tab.dbName+"."+tab.tbName, patexc) > 0 {
+				log.Printf("%s.%s is excluded because match with %s", tab.dbName, tab.tbName, patexc)
 			} else {
-				result_flt=append(result_flt,tab)
+				result_flt = append(result_flt, tab)
 			}
 		}
-		result=result_flt
+		result = result_flt
 	}
 	return result
 }
@@ -654,30 +656,30 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool)
 	}
 	log.Printf("-------------------")
 	cnt := 0
-	for _ , v := range result {
-		if v.onError & 1 == 1 && ! ( v.onError & 16 == 16 ) {
+	for _, v := range result {
+		if v.onError&1 == 1 && !(v.onError&16 == 16) {
 			log.Printf("table %s.%s has no primary key\n", v.dbName, v.tbName)
 			log.Print("you may want to use -guessprimarykey\n")
 			cnt++
 		}
-		if v.onError & 2 == 2 {
+		if v.onError&2 == 2 {
 			log.Printf("table %s.%s has no alternative indexes to use as a primary key\n", v.dbName, v.tbName)
 			cnt++
 		}
-		if v.onError & 4 == 4 {
+		if v.onError&4 == 4 {
 			log.Printf("table %s.%s is not a innodb table\n", v.dbName, v.tbName)
 			cnt++
 		}
-		if v.onError & 8 == 8 {
+		if v.onError&8 == 8 {
 			log.Printf("table %s.%s is not a regular table\n", v.dbName, v.tbName)
 			cnt++
 		}
-		if v.onError & 16 == 16 {
+		if v.onError&16 == 16 {
 			log.Printf("table %s.%s does not exists\n", v.dbName, v.tbName)
 			cnt++
 		}
 	}
-	if ( cnt > 0 ) {
+	if cnt > 0 {
 		log.Fatalf("too many ERRORS")
 	}
 	return result, true
@@ -757,7 +759,7 @@ func generateEqualityPredicat(pkeyCols []string) (string, []int) {
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64, readers_cnt int , loop_cnt int ) {
+func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64, readers_cnt int, loop_cnt int) {
 	log.Printf("tableChunkBrowser  start\n")
 	var sizeofchunk int64
 	var must_prepare_query bool
@@ -768,7 +770,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		log.Fatal("can not ping")
 	}
 	j := 0
-	format_cnt_table:=" %0"+fmt.Sprintf("%d",len(fmt.Sprintf("%d",len(tableInfos))))+"d/"+fmt.Sprintf("%d ",len(tableInfos))
+	format_cnt_table := " %0" + fmt.Sprintf("%d", len(fmt.Sprintf("%d", len(tableInfos)))) + "d/" + fmt.Sprintf("%d ", len(tableInfos))
 	for j < len(tableInfos) {
 		sizeofchunk = sizeofchunk_init
 		sql_lst_pk_cols := fmt.Sprintf("`%s`", tableInfos[j].primaryKey[0])
@@ -779,7 +781,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		}
 		sql_full_tab_name := fmt.Sprintf("`%s`.`%s`", tableInfos[j].dbName, tableInfos[j].tbName)
 		the_query := fmt.Sprintf("select %s from %s order by %s limit 1 ", sql_lst_pk_cols, sql_full_tab_name, sql_lst_pk_cols)
-		if ( mode_debug ) {
+		if mode_debug {
 			log.Printf("table %s size pk %d query :  %s \n", sql_full_tab_name, c, the_query)
 		}
 		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
@@ -817,9 +819,9 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		if row_cnt == 0 {
 			log.Printf("table %s is empty \n", sql_full_tab_name)
 			j++
-			if j  == len(tableInfos) && loop_cnt > 1 {
+			if j == len(tableInfos) && loop_cnt > 1 {
 				loop_cnt--
-				j=0
+				j = 0
 			}
 			continue
 		}
@@ -827,7 +829,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		for n, value := range a_sql_row {
 			start_pk_row[n] = value.String
 		}
-		log.Printf("table["+format_cnt_table+"] %s first pk ( %s ) - start scan pk %s\n", j+1,sql_full_tab_name, sql_lst_pk_cols, start_pk_row)
+		log.Printf("table["+format_cnt_table+"] %s first pk ( %s ) - start scan pk %s\n", j+1, sql_full_tab_name, sql_lst_pk_cols, start_pk_row)
 		// --------------------------------------------------------------------------
 		sql_cond_pk, sql_val_indices_pk := generatePredicat(tableInfos[j].primaryKey, true)
 		var sql_order_pk_cols string
@@ -851,13 +853,13 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 					sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
 			}
 			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-			prepare_finish_query,p_err = adbConn.PrepareContext(ctx,the_finish_query)
+			prepare_finish_query, p_err = adbConn.PrepareContext(ctx, the_finish_query)
 			if p_err != nil {
-				log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query , p_err.Error())
+				log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query, p_err.Error())
 			}
 			sql_vals_pk = generateValuesForPredicat(sql_val_indices_pk, start_pk_row)
-			if ( mode_debug ) {
-				log.Printf("table %s query :  %s with %d params sizeofchunk %d\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk),sizeofchunk)
+			if mode_debug {
+				log.Printf("table %s query :  %s with %d params sizeofchunk %d\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk), sizeofchunk)
 			}
 			q_rows, q_err = prepare_finish_query.Query(sql_vals_pk...)
 			if q_err != nil {
@@ -866,7 +868,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			for q_rows.Next() {
 				err := q_rows.Scan(ptrs_nextpk...)
 				if err != nil {
-					log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) \n", sql_full_tab_name, len(ptrs_nextpk) )
+					log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) \n", sql_full_tab_name, len(ptrs_nextpk))
 					log.Fatal(err.Error())
 				}
 			}
@@ -877,12 +879,12 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			if !tableInfos[j].fakePrimaryKey || !reflect.DeepEqual(start_pk_row, end_pk_row) || pk_cnt < sizeofchunk {
 				break
 			} else {
-				log.Printf("we change sizeofchunk from %d to %d",sizeofchunk,sizeofchunk*15/10)
+				log.Printf("we change sizeofchunk from %d to %d", sizeofchunk, sizeofchunk*15/10)
 				sizeofchunk = sizeofchunk * 15 / 10
 				_ = prepare_finish_query.Close()
 			}
 		}
-		log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row,sizeofchunk)
+		log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row, sizeofchunk)
 		// ------------------------------------------------------------------
 		var chunk_id int64 = 0
 		if mode_debug {
@@ -907,14 +909,14 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 				// ----------------------------------------------------------
 				start_pk_row = end_pk_row
 				// ----------------------------------------------------------
-				if ( must_prepare_query ) {
+				if must_prepare_query {
 					the_finish_query = fmt.Sprintf("select %s,cast(@cnt as unsigned ) as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
 						sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
 					_ = prepare_finish_query.Close()
 					ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-					prepare_finish_query,p_err = adbConn.PrepareContext(ctx,the_finish_query)
+					prepare_finish_query, p_err = adbConn.PrepareContext(ctx, the_finish_query)
 					if p_err != nil {
-						log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query , p_err.Error())
+						log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query, p_err.Error())
 					}
 					must_prepare_query = false
 				}
@@ -927,8 +929,8 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 				for q_rows.Next() {
 					err := q_rows.Scan(ptrs_nextpk...)
 					if err != nil {
-						log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) ( len sql_vals_pk %d) \n", sql_full_tab_name, len(ptrs_nextpk),len(sql_vals_pk) )
-						log.Printf("query for nextpk is %s",the_finish_query)
+						log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) ( len sql_vals_pk %d) \n", sql_full_tab_name, len(ptrs_nextpk), len(sql_vals_pk))
+						log.Printf("query for nextpk is %s", the_finish_query)
 						log.Fatal(err.Error())
 					}
 				}
@@ -972,9 +974,9 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 		}
 		// --------------------------------------------------------------------------
 		j++
-		if j  == len(tableInfos) && loop_cnt > 1 {
+		if j == len(tableInfos) && loop_cnt > 1 {
 			loop_cnt--
-			j=0
+			j = 0
 		}
 	}
 	log.Printf("tableChunkBrowser finish\n")
@@ -1003,8 +1005,9 @@ func ChunkReaderDumpHeader(dumpmode string, cur_iow io.Writer, sql_tab_cols stri
 		io.WriteString(cur_iow, fmt.Sprintf("%s\n", sql_tab_cols))
 	}
 }
+
 // ------------------------------------------------------------------------------------------
-func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *int, a_quote_info []bool, a_fract_info []bool, a_char_info []bool, a_row []any, a_sql_row []*sql.NullString, a_table_info MetadataTable, sql_tab_cols string, sql_val_cols string, ptrs []any, insert_size int, cur_iow io.Writer , dst_chan chan *string ) {
+func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *int, a_quote_info []bool, a_fract_info []bool, a_char_info []bool, a_row []any, a_sql_row []*sql.NullString, a_table_info MetadataTable, sql_tab_cols string, sql_val_cols string, ptrs []any, insert_size int, cur_iow io.Writer, dst_chan chan *string) {
 	// --------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
 		var insert_sql_arr []string
@@ -1021,22 +1024,22 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 		//
 		//    4 rows => 4*2+1
 		//
-		insert_sql_arr=make([]string, insert_size*2+1)
+		insert_sql_arr = make([]string, insert_size*2+1)
 		if dumpmode == "cpy" {
-			insert_sql_arr[0]=fmt.Sprintf("insert into `%s`.`%s`(%s) values (", a_table_info.dbName, a_table_info.tbName, sql_tab_cols)
+			insert_sql_arr[0] = fmt.Sprintf("insert into `%s`.`%s`(%s) values (", a_table_info.dbName, a_table_info.tbName, sql_tab_cols)
 		} else {
-			insert_sql_arr[0]=fmt.Sprintf("insert into `%s`(%s) values (", a_table_info.tbName, sql_tab_cols)
+			insert_sql_arr[0] = fmt.Sprintf("insert into `%s`(%s) values (", a_table_info.tbName, sql_tab_cols)
 		}
 		row_cnt := 0
 		arr_ind := -1
 		for q_rows.Next() {
 			err := q_rows.Scan(ptrs...)
 			if err != nil {
-				log.Printf("can not scan %s ( already scan %d + %d ) , len(ptrs) = %d , cols %s ",a_table_info.tbName , *query_row_count , row_cnt , len(ptrs) , sql_tab_cols )
+				log.Printf("can not scan %s ( already scan %d + %d ) , len(ptrs) = %d , cols %s ", a_table_info.tbName, *query_row_count, row_cnt, len(ptrs), sql_tab_cols)
 				log.Fatal(err)
 			}
 			row_cnt++
-			arr_ind+=2
+			arr_ind += 2
 			// ----------------------------------------------------------
 			for n, value := range a_sql_row {
 				if value == nil {
@@ -1044,13 +1047,13 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 				} else {
 					if a_quote_info[n] {
 						if a_quote_info[n] && (strings.IndexAny(value.String, "\\\u0000\n\r\"'") != -1) {
-							v := strings.ReplaceAll(value.String, "\\"    , "\\\\")
-						        v  = strings.ReplaceAll(v           , "\u0000", "\\0" )
-						        v  = strings.ReplaceAll(v           , "\n"    , "\\n" )
-						        v  = strings.ReplaceAll(v           , "\r"    , "\\r" )
-						        v  = strings.ReplaceAll(v           , "'"     , "\\'" )
-						        v  = strings.ReplaceAll(v           , "\""    , "\\\"")
-							a_row[n] = fmt.Sprintf("'%s'",v)
+							v := strings.ReplaceAll(value.String, "\\", "\\\\")
+							v = strings.ReplaceAll(v, "\u0000", "\\0")
+							v = strings.ReplaceAll(v, "\n", "\\n")
+							v = strings.ReplaceAll(v, "\r", "\\r")
+							v = strings.ReplaceAll(v, "'", "\\'")
+							v = strings.ReplaceAll(v, "\"", "\\\"")
+							a_row[n] = fmt.Sprintf("'%s'", v)
 						} else {
 							a_row[n] = fmt.Sprintf("'%s'", value.String)
 						}
@@ -1060,31 +1063,31 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 				}
 			}
 			// ----------------------------------------------------------
-			insert_sql_arr[arr_ind]=fmt.Sprintf(sql_val_cols, a_row...)
-			insert_sql_arr[arr_ind+1]="),("
+			insert_sql_arr[arr_ind] = fmt.Sprintf(sql_val_cols, a_row...)
+			insert_sql_arr[arr_ind+1] = "),("
 			// ----------------------------------------------------------
 			if row_cnt >= insert_size {
-				insert_sql_arr[arr_ind+1]=");\n"
-				a_str := strings.Join(insert_sql_arr[0:arr_ind+2],"")
+				insert_sql_arr[arr_ind+1] = ");\n"
+				a_str := strings.Join(insert_sql_arr[0:arr_ind+2], "")
 				if dumpmode == "cpy" {
 					dst_chan <- &a_str
 				} else {
-					io.WriteString(cur_iow,a_str)
+					io.WriteString(cur_iow, a_str)
 				}
-				*query_row_count+=row_cnt
+				*query_row_count += row_cnt
 				row_cnt = 0
 				arr_ind = -1
 			}
 		}
 		if row_cnt > 0 {
-			insert_sql_arr[arr_ind+1]=");\n"
-			a_str := strings.Join(insert_sql_arr[0:arr_ind+2],"")
+			insert_sql_arr[arr_ind+1] = ");\n"
+			a_str := strings.Join(insert_sql_arr[0:arr_ind+2], "")
 			if dumpmode == "cpy" {
 				dst_chan <- &a_str
 			} else {
-				io.WriteString(cur_iow,a_str)
+				io.WriteString(cur_iow, a_str)
 			}
-			*query_row_count+=row_cnt
+			*query_row_count += row_cnt
 		}
 	}
 	// --------------------------------------------------------------------------
@@ -1092,7 +1095,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 		for q_rows.Next() {
 			err := q_rows.Scan(ptrs...)
 			if err != nil {
-				log.Printf("can not scan %s ( already scan %d ) , len(ptrs) = %d , cols %s ",a_table_info.tbName , *query_row_count , len(ptrs) , sql_tab_cols )
+				log.Printf("can not scan %s ( already scan %d ) , len(ptrs) = %d , cols %s ", a_table_info.tbName, *query_row_count, len(ptrs), sql_tab_cols)
 				log.Fatal(err)
 			}
 			*query_row_count++
@@ -1131,8 +1134,8 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbConn sql.Conn, tableInfos []MetadataTable, id int, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, insert_size int) {
-	log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s \n", id,insert_size,dumpmode,dumpcompress)
+func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbConn sql.Conn, tableInfos []MetadataTable, id int, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, insert_size int) {
+	log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s \n", id, insert_size, dumpmode, dumpcompress)
 
 	var last_tableid int = -1
 	var sql_cond_lower_pk string
@@ -1173,7 +1176,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 			}
 			fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 			if err != nil {
-				log.Printf("can not openfile %s",fname)
+				log.Printf("can not openfile %s", fname)
 				log.Fatal(err.Error())
 			} else {
 				fh.Close()
@@ -1224,14 +1227,14 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 				_ = prepare_reader_equality_query.Close()
 			}
 			ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
-			prepare_reader_interval_query,p_err = adbConn.PrepareContext(ctx,the_reader_interval_query)
+			prepare_reader_interval_query, p_err = adbConn.PrepareContext(ctx, the_reader_interval_query)
 			if p_err != nil {
-				log.Fatalf("can not prepare to read a chunk ( %s )\n%s", the_reader_interval_query , p_err.Error())
+				log.Fatalf("can not prepare to read a chunk ( %s )\n%s", the_reader_interval_query, p_err.Error())
 			}
 			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-			prepare_reader_equality_query,p_err = adbConn.PrepareContext(ctx,the_reader_equality_query)
+			prepare_reader_equality_query, p_err = adbConn.PrepareContext(ctx, the_reader_equality_query)
 			if p_err != nil {
-				log.Fatalf("can not prepare to read one pk ( %s )\n%s", the_reader_equality_query , p_err.Error())
+				log.Fatalf("can not prepare to read one pk ( %s )\n%s", the_reader_equality_query, p_err.Error())
 			}
 			// ------------------------------------------------------------------
 			a_sql_row = make([]*sql.NullString, ctab)
@@ -1257,7 +1260,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 				fname := file_name[last_tableid]
 				und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				if err != nil {
-					log.Printf("can not openfile %s",fname)
+					log.Printf("can not openfile %s", fname)
 					log.Fatal(err.Error())
 				}
 				if dumpcompress == "zstd" {
@@ -1315,7 +1318,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 		}
 		// --------------------------------------------------------------------------
 		if mode_debug {
-			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\nrows cnt: %d\n", sql_full_tab_name, *the_query, len(sql_vals_pk), sql_vals_pk, query_row_count )
+			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\nrows cnt: %d\n", sql_full_tab_name, *the_query, len(sql_vals_pk), sql_vals_pk, query_row_count)
 		}
 		// --------------------------------------------------------------------------
 		a_chunk = <-chunk2read
@@ -1332,14 +1335,14 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string , adbC
 }
 
 // ------------------------------------------------------------------------------------------
-func tableCopyWriter(sql2inject chan *string , adbConn sql.Conn, id int ) {
+func tableCopyWriter(sql2inject chan *string, adbConn sql.Conn, id int) {
 	log.Printf("tableCopyWriter[%d] start\n", id)
 	a_insert_sql := <-sql2inject
 	for a_insert_sql != nil {
 		// --------------------------------------------------------------------------
-		_, e_err := adbConn.ExecContext(context.Background(),*a_insert_sql)
+		_, e_err := adbConn.ExecContext(context.Background(), *a_insert_sql)
 		if e_err != nil {
-			log.Printf("error with :\n%s",*a_insert_sql)
+			log.Printf("error with :\n%s", *a_insert_sql)
 			log.Fatalf("thread %d , can not insert a chunk\n%s\n", id, e_err.Error())
 		}
 		// --------------------------------------------------------------------------
@@ -1374,7 +1377,7 @@ func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds)
 	// ----------------------------------------------------------------------------------
 	arg_debug := flag.Bool("debug", false, "debug mode")
-	arg_loop := flag.Int("loopcnt",1, "how many times we are going to loop (for debugging)")
+	arg_loop := flag.Int("loopcnt", 1, "how many times we are going to loop (for debugging)")
 	// ----------------------------------------------------------------------------------
 	arg_db_port := flag.Int("port", 3306, "the database port")
 	arg_db_host := flag.String("host", "127.0.0.1", "the database host")
@@ -1385,11 +1388,11 @@ func main() {
 	arg_insert_size := flag.Int("insertsize", 100, "rows count for each insert")
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql / cpy ")
-	arg_dumpheader := flag.Bool("dumpheader", true , "add a header on csv/sql")
+	arg_dumpheader := flag.Bool("dumpheader", true, "add a header on csv/sql")
 	arg_dumpcompress := flag.String("dumpcompress", "", "which compression format to use , zstd")
 	// ------------
 	var arg_dbs arrayFlags
-	flag.Var(&arg_dbs,"db","database(s) of tables to dump")
+	flag.Var(&arg_dbs, "db", "database(s) of tables to dump")
 	// ------------
 	var arg_tables2dump arrayFlags
 	flag.Var(&arg_tables2dump, "table", "table to dump")
@@ -1444,53 +1447,53 @@ func main() {
 		flag.Usage()
 		os.Exit(9)
 	}
-	if len(*arg_dumpcompress) != 0 && (*arg_dumpcompress == "zstd") && len(*arg_dumpmode) != 0 && *arg_dumpmode == "cpy"  {
+	if len(*arg_dumpcompress) != 0 && (*arg_dumpcompress == "zstd") && len(*arg_dumpmode) != 0 && *arg_dumpmode == "cpy" {
 		flag.Usage()
 		os.Exit(10)
 	}
 	if len(flag.Args()) > 0 {
 		log.Printf("extra arguments ( non-recognized) on command line")
 		for _, v := range flag.Args() {
-			log.Printf(" '%s'    is not recognized \n",v)
+			log.Printf(" '%s'    is not recognized \n", v)
 		}
 		flag.Usage()
 		os.Exit(11)
 	}
-	if arg_tables2dump != nil && len(arg_tables2exclude) !=0  {
+	if arg_tables2dump != nil && len(arg_tables2exclude) != 0 {
 		log.Printf("can not specify table to exclude with a list of tables")
 		flag.Usage()
 		os.Exit(12)
 	}
 	mode_debug = *arg_debug
 	// ----------------------------------------------------------------------------------
-	var conSrc  []sql.Conn
-	var conDst  []sql.Conn
+	var conSrc []sql.Conn
+	var conDst []sql.Conn
 	var dbSrc *sql.DB
 	var dbDst *sql.DB
-	dbSrc,conSrc, _ , _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, *arg_db_parr,arg_dbs[0])
-	if (*arg_dumpmode == "cpy") {
-		dbDst , conDst, _ = GetDstConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr,arg_dbs[0])
+	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, *arg_db_parr, arg_dbs[0])
+	if *arg_dumpmode == "cpy" {
+		dbDst, conDst, _ = GetDstConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_dbs[0])
 	}
 	// ----------------------------------------------------------------------------------
 	var tables2dump []aTable
 	if arg_tables2dump == nil {
 		tables2dump = GetListTables(conSrc[0], arg_dbs, arg_tables2exclude)
 	} else {
-		for _ , t := range arg_tables2dump {
-			tables2dump = append(tables2dump,aTable{dbName:arg_dbs[0],tbName:t})
+		for _, t := range arg_tables2dump {
+			tables2dump = append(tables2dump, aTable{dbName: arg_dbs[0], tbName: t})
 		}
 	}
 	if mode_debug {
 		log.Print(tables2dump)
 	}
 	r, _ := GetMetadataInfo4Tables(conSrc[0], tables2dump, *arg_guess_pk)
-	if ( mode_debug ) {
+	if mode_debug {
 		log.Printf("tables infos  => %s", r)
 	}
 	// ----------------------------------------------------------------------------------
-	var wg  sync.WaitGroup
+	var wg sync.WaitGroup
 	var wg_cpy sync.WaitGroup
-	pk_chunks_to_read := make(chan tablechunk, *arg_db_parr * 100)
+	pk_chunks_to_read := make(chan tablechunk, *arg_db_parr*100)
 	sql_to_write := make(chan *string, 10000)
 	if mode_debug {
 		pk_chunks_to_read = make(chan tablechunk, 5)
@@ -1500,7 +1503,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		tableChunkBrowser(conSrc[0], r, pk_chunks_to_read, int64(*arg_chunk_size), len(conSrc)-1,*arg_loop)
+		tableChunkBrowser(conSrc[0], r, pk_chunks_to_read, int64(*arg_chunk_size), len(conSrc)-1, *arg_loop)
 	}()
 	// ------------
 	j := 1
@@ -1508,13 +1511,13 @@ func main() {
 		wg.Add(1)
 		go func(adbConn sql.Conn, id int) {
 			defer wg.Done()
-			tableChunkReader(pk_chunks_to_read, sql_to_write , adbConn, r, id, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader , *arg_dumpcompress, *arg_insert_size)
+			tableChunkReader(pk_chunks_to_read, sql_to_write, adbConn, r, id, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, *arg_insert_size)
 		}(conSrc[j], j)
 		j++
 		time.Sleep(5 * time.Millisecond)
 	}
 	// ------------
-	if len (conDst)>0 {
+	if len(conDst) > 0 {
 		j = 0
 		for j < len(conDst) {
 			wg_cpy.Add(1)
@@ -1531,18 +1534,18 @@ func main() {
 	if mode_debug {
 		log.Print("we are done with browser & reader")
 	}
-	if len (conDst)>0 {
+	if len(conDst) > 0 {
 		j = 0
 		for j < len(conDst) {
 			sql_to_write <- nil
 			j++
 		}
-		log.Printf("we added %d nil pointer to flush copiers",len(conDst))
+		log.Printf("we added %d nil pointer to flush copiers", len(conDst))
 		wg_cpy.Wait()
 	}
 	// ----------------------------------------------------------------------------------
 	dbSrc.Close()
-	if len (conDst)>0 {
+	if len(conDst) > 0 {
 		dbDst.Close()
 	}
 }
