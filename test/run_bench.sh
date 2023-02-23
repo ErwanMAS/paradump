@@ -1,16 +1,13 @@
 #!/bin/bash
 
-cd "$(dirname $0)"
+cd "$(dirname "$0")"
 
 BINARY=../src/paradump
-
-DEBUG_CMD=">/dev/null 2>&1"
 
 if [ "$1" = "--debug" ]
 then
     set -x
     set -e
-    DEBUG_CMD=""
 fi
 
 NEED_SUDO=""
