@@ -451,7 +451,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		}
 		a_col.isNullable = (a_str == "YES")
 		a_col.isKindChar = (a_col.colType == "char" || a_col.colType == "longtext" || a_col.colType == "mediumtext" || a_col.colType == "text" || a_col.colType == "tinytext" || a_col.colType == "varchar")
-		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" )
+		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" || a_col.colType == "bit" )
 		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
 		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_int > 0)
 		result.columnInfos = append(result.columnInfos, a_col)
@@ -1022,7 +1022,11 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 		//    4 rows => 4*2+1
 		//
 		insert_sql_arr=make([]string, insert_size*2+1)
-		insert_sql_arr[0]=fmt.Sprintf("insert into `%s`(%s) values (", a_table_info.tbName, sql_tab_cols)
+		if dumpmode == "cpy" {
+			insert_sql_arr[0]=fmt.Sprintf("insert into `%s`.`%s`(%s) values (", a_table_info.dbName, a_table_info.tbName, sql_tab_cols)
+		} else {
+			insert_sql_arr[0]=fmt.Sprintf("insert into `%s`(%s) values (", a_table_info.tbName, sql_tab_cols)
+		}
 		row_cnt := 0
 		arr_ind := -1
 		for q_rows.Next() {
@@ -1333,9 +1337,9 @@ func tableCopyWriter(sql2inject chan *string , adbConn sql.Conn, id int ) {
 	a_insert_sql := <-sql2inject
 	for a_insert_sql != nil {
 		// --------------------------------------------------------------------------
-		ctx, _ := context.WithTimeout(context.Background(), 20*time.Second)
-		_, e_err := adbConn.ExecContext(ctx,*a_insert_sql)
+		_, e_err := adbConn.ExecContext(context.Background(),*a_insert_sql)
 		if e_err != nil {
+			log.Printf("error with :\n%s",*a_insert_sql)
 			log.Fatalf("thread %d , can not insert a chunk\n%s\n", id, e_err.Error())
 		}
 		// --------------------------------------------------------------------------
