@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 NEED_SUDO=""
 docker ps -a -q >/dev/null 2>&1 || {
@@ -23,7 +23,7 @@ do
 
     IS_RUNNING=$($NEED_SUDO docker ps -q -a --filter name="${NAM}")
 
-    if [ -n "$IS_RUNNING" ]
+    if [[ -n "$IS_RUNNING" ]]
     then
 	echo ERROR some docker image is already running
 	$NEED_SUDO docker ps -a --filter name="${NAM}"
@@ -31,7 +31,7 @@ do
 	echo
     fi
 done
-if [ $CNT_ERR -gt 0 ]
+if [[ $CNT_ERR -gt 0 ]]
 then
     exit 1
 fi
@@ -44,7 +44,7 @@ do
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
-    if [ "$PRT" -eq 4000 ]
+    if [[ "$PRT" -eq 4000 ]]
     then
 	EXTRA_PARAMS=--innodb_adaptive_hash_index_partitions=8
     else
@@ -66,9 +66,9 @@ do
 
     T=60
     C=3
-    while [ $C -gt 0 ]
+    while [[ $C -gt 0 ]]
     do
-	while [ "$( $NEED_SUDO docker exec -i "${NAM}"  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' )" -eq 0 -a "$T" -gt 0 ]
+	while [[ "$( $NEED_SUDO docker exec -i "${NAM}"  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' )" -eq 0 && "$T" -gt 0 ]]
 	do
 	    sleep 2
 	    T=$(( T - 1 ))
@@ -103,7 +103,7 @@ do
     do
 	(
 	    echo "loading  $D  on DB $DB"
-	    if [ $DB = "barfoo" ]
+	    if [[ $DB = "barfoo" ]]
 	    then
 		CONTAINER_DST=mysql_target
 	    else
@@ -122,7 +122,7 @@ do
 	(
 	    T=$(echo "$D" | cut -d_ -f2- | cut -d. -f1)
 	    echo "optimize  $T on DB $DB"
-	    if [ $DB = "barfoo" ]
+	    if [[ $DB = "barfoo" ]]
 	    then
 		CONTAINER_DST=mysql_target
 	    else

@@ -1,12 +1,12 @@
 #!/bin/bash
 
-cd "$(dirname $0)"
+cd "$(dirname "$0")" || exit 200
 
 BINARY=../src/paradump
 
 DEBUG_CMD=">/dev/null 2>&1"
 
-if [ "$1" = "--debug" ]
+if [[ "$1" = "--debug" ]]
 then
     set -x
     DEBUG_CMD=""
@@ -18,7 +18,7 @@ docker ps -a -q >/dev/null 2>&1 || {
     echo trying with sudo
     sudo docker ps -a -q >/dev/null 2>&1 || {
 	echo ERROR can not connect to docker with or without sudo
-	exit 1
+	exit 201
     }
     NEED_SUDO="sudo"
 }
@@ -41,10 +41,10 @@ do
     for T in $LIST_TABLES
     do
 	CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port $port  -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
-	if [ -z "$CNT" ]
+	if [[ -z "$CNT" ]]
 	then
 	    echo "can cont count from $T"
-	    exit 1
+	    exit 202
 	fi
 	eval "CNT_$T=$CNT"
 	echo "port $port table $T count $CNT"
@@ -144,17 +144,17 @@ do
     CSV_CNT=0
     for F in "${TMPDIR_T100}/dump_foobar_${T}"_*.csv
     do
-	if [ -s "$F" ]
+	if [[ -s "$F" ]]
 	then
 	    CSV_CNT=$(( CSV_CNT + $( wc -l < "$F" ) ))
 	fi
     done
-    if [ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]
+    if [[ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 100: failure ($FAIL)" && exit 100
 fi
@@ -169,17 +169,17 @@ do
     CSV_CNT=0
     for F in "${TMPDIR}/dump_foobar_${T}"_*.csv
     do
-	if [ -s "$F" ]
+	if [[ -s "$F" ]]
 	then
 	    CSV_CNT=$(( CSV_CNT - 1 + $( wc -l < "$F" ) ))
 	fi
     done
-    if [ "$CSV_CNT" -ne  "$( eval "echo \$CNT_$T" )" ]
+    if [[ "$CSV_CNT" -ne  "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 101: failure ($FAIL)" && exit 101
 fi
@@ -195,17 +195,17 @@ do
     CSV_CNT=0
     for F in "${TMPDIR}/dump_foobar_${T}"_*.csv.zstd
     do
-	if [ -s "$F" ]
+	if [[ -s "$F" ]]
 	then
 	    CSV_CNT=$(( CSV_CNT - 1 + $( zstdcat "$F" | wc -l ) ))
 	fi
     done
-    if [ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]
+    if [[ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 102: failure ($FAIL)" && exit 102
 fi
@@ -222,17 +222,17 @@ do
     SQL_CNT=0
     for F in "${TMPDIR}/dump_foobar_${T}"_*.sql
     do
-	if [ -s "$F" ]
+	if [[ -s "$F" ]]
 	then
 	    SQL_CNT=$(( SQL_CNT + $( grep -c '^insert' < "$F" ) ))
 	fi
     done
-    if [ "$SQL_CNT" -ne "$( eval "echo \$CNT_$T" )" ]
+    if [[ "$SQL_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 110: failure ($FAIL)" && exit 110
 fi
@@ -248,17 +248,17 @@ do
     SQL_CNT=0
     for F in "${TMPDIR}/dump_foobar_${T}"_*.sql.zstd
     do
-	if [ -s "$F" ]
+	if [[ -s "$F" ]]
 	then
 	    SQL_CNT=$(( SQL_CNT + $( zstdcat "$F" | grep -c '^insert' ) ))
 	fi
     done
-    if [ "$SQL_CNT" -ne "$( eval "echo \$CNT_$T" )" ]
+    if [[ "$SQL_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 111: failure ($FAIL)" && exit 111
 fi
@@ -271,22 +271,22 @@ FAIL=0
 for T in $LIST_TABLES
 do
     CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
-    if [ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
 CNT_TAG_MATCH_U8=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_u8 = hex(cast(convert(label using utf8mb4)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
-if [ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+1))
 fi
 CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
-if [ "$CNT_TAG_MATCH_L1" -ne "$( eval "echo \$CNT_ticket_tag" )" ]
+if [[ "$CNT_TAG_MATCH_L1" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+1))
 fi
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 120: failure ($FAIL)" && exit 120
 fi
@@ -300,20 +300,20 @@ do
     DIFF_RES=$(mktemp)
     CNT_LINES_SRC=$(cat "${TMPDIR_T100}/dump_foobar_${T}"_*.csv | wc -l )
     CNT_LINES_DST=$(cat "${TMPDIR_T100}/dump_foobar_copy_${T}"_*.csv | wc -l )
-    if [ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]
+    if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
     then
 	FAIL=$((FAIL+1))
     else
 	diff -u <( cat "${TMPDIR_T100}/dump_foobar_${T}"_*.csv | sort ) <( cat "${TMPDIR_T100}/dump_foobar_copy_${T}"_*.csv | sort )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
-	if [ "$CNT_PLUS" -gt 0 -o "$CNT_MINUS" -gt 0 ]
+	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
 	then
 	    FAIL=$((FAIL+1))
 	fi
     fi
 done
-if [ "$FAIL" -gt 0 ]
+if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 121: failure ($FAIL)" && exit 121
 fi
