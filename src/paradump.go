@@ -696,6 +696,12 @@ type tablechunk struct {
 }
 
 // ------------------------------------------------------------------------------------------
+type insertchunk struct {
+	table_id int
+	sql      *string
+}
+
+// ------------------------------------------------------------------------------------------
 func generateValuesForPredicat(indices []int, boundValues []string) []any {
 	sql_vals := make([]any, 0)
 	for _, v := range indices {
@@ -1013,9 +1019,11 @@ func ChunkReaderDumpHeader(dumpmode string, cur_iow io.Writer, sql_tab_cols stri
 }
 
 // ------------------------------------------------------------------------------------------
-func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *int, a_quote_info []bool, a_fract_info []bool, a_char_info []bool, a_row []any, a_sql_row []*sql.NullString, a_table_info MetadataTable, sql_tab_cols string, sql_val_cols string, ptrs []any, insert_size int, cur_iow io.Writer, dst_chan chan *string) {
+func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *int, a_quote_info []bool, a_fract_info []bool, a_char_info []bool, a_row []string, a_sql_row []*sql.NullString, a_table_info MetadataTable, tab_id int, sql_tab_cols string, ptrs []any, insert_size int, dst_chan chan insertchunk) {
 	// --------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
+		// ------------------------------------------------------------------
+		// we use a array of string to build the final sql insert
 		//
 		//   0 => insert into (
 		//   1 =>
@@ -1035,6 +1043,13 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 		} else {
 			insert_sql_arr[0] = fmt.Sprintf("insert into `%s`(%s) values (", a_table_info.tbName, sql_tab_cols)
 		}
+		u_ind := 2
+		for u_ind < insert_size*2 {
+			insert_sql_arr[u_ind] = "),("
+			u_ind += 2
+		}
+		insert_sql_arr[u_ind] = ");\n"
+		// ------------------------------------------------------------------
 		row_cnt := 0
 		arr_ind := -1
 		for q_rows.Next() {
@@ -1058,9 +1073,9 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 							v = strings.ReplaceAll(v, "\r", "\\r")
 							v = strings.ReplaceAll(v, "'", "\\'")
 							v = strings.ReplaceAll(v, "\"", "\\\"")
-							a_row[n] = fmt.Sprintf("'%s'", v)
+							a_row[n] = "'" + v + "'"
 						} else {
-							a_row[n] = fmt.Sprintf("'%s'", value.String)
+							a_row[n] = "'" + value.String + "'"
 						}
 					} else {
 						a_row[n] = value.String
@@ -1068,17 +1083,11 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 				}
 			}
 			// ----------------------------------------------------------
-			insert_sql_arr[arr_ind] = fmt.Sprintf(sql_val_cols, a_row...)
-			insert_sql_arr[arr_ind+1] = "),("
+			insert_sql_arr[arr_ind] = strings.Join(a_row, ",")
 			// ----------------------------------------------------------
 			if row_cnt >= insert_size {
-				insert_sql_arr[arr_ind+1] = ");\n"
 				a_str := strings.Join(insert_sql_arr[0:arr_ind+2], "")
-				if dumpmode == "cpy" {
-					dst_chan <- &a_str
-				} else {
-					io.WriteString(cur_iow, a_str)
-				}
+				dst_chan <- insertchunk{table_id: tab_id, sql: &a_str}
 				*query_row_count += row_cnt
 				row_cnt = 0
 				arr_ind = -1
@@ -1087,11 +1096,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 		if row_cnt > 0 {
 			insert_sql_arr[arr_ind+1] = ");\n"
 			a_str := strings.Join(insert_sql_arr[0:arr_ind+2], "")
-			if dumpmode == "cpy" {
-				dst_chan <- &a_str
-			} else {
-				io.WriteString(cur_iow, a_str)
-			}
+			dst_chan <- insertchunk{table_id: tab_id, sql: &a_str}
 			*query_row_count += row_cnt
 		}
 	}
@@ -1114,7 +1119,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 					}
 				} else {
 					if a_quote_info[n] && strings.ContainsAny(value.String, "\n,\"") {
-						a_row[n] = fmt.Sprintf("\"%s\"", strings.ReplaceAll(value.String, "\"", "\"\""))
+						a_row[n] = "'" + strings.ReplaceAll(value.String, "\"", "\"\"") + "'"
 					} else if a_fract_info[n] {
 						timeSec, timeFract, dotFound := strings.Cut(value.String, ".")
 						if dotFound {
@@ -1132,16 +1137,20 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 				}
 			}
 			// ----------------------------------------------------------
-			io.WriteString(cur_iow, fmt.Sprintf(sql_val_cols+"\n", a_row...))
+			a_str := strings.Join(a_row, ",") + "\n"
+			dst_chan <- insertchunk{table_id: tab_id, sql: &a_str}
 			// ----------------------------------------------------------
 		}
 	}
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbConn sql.Conn, tableInfos []MetadataTable, id int, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, insert_size int) {
-	log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s \n", id, insert_size, dumpmode, dumpcompress)
-
+func tableChunkReader(chunk2read chan tablechunk, sql2inject chan insertchunk, adbConn sql.Conn, tableInfos []MetadataTable, id int, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, insert_size int, z_level int, z_para int) {
+	if dumpcompress == "zstd" {
+		log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s %d %d\n", id, insert_size, dumpmode, dumpcompress, z_level, z_para)
+	} else {
+		log.Printf("tableChunkReader[%d] start with insert size %d / mode %s \n", id, insert_size, dumpmode)
+	}
 	var last_tableid int = -1
 	var sql_cond_lower_pk string
 	var sql_cond_upper_pk string
@@ -1151,16 +1160,12 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 	var sql_full_tab_name string
 	var sql_pk_cols string
 	var sql_tab_cols string
-	var sql_val_cols string
 	var the_reader_interval_query string
 	var the_reader_equality_query string
 	var prepare_reader_interval_query *sql.Stmt
 	var prepare_reader_equality_query *sql.Stmt
 	var p_err error
-	var zst_enc *zstd.Encoder
-	var und_fh *os.File
-	var err error
-	a_row := make([]any, 0)
+	a_row := make([]string, 0)
 	a_quote_info := make([]bool, 0)
 	a_char_info := make([]bool, 0)
 	a_fract_info := make([]bool, 0)
@@ -1169,36 +1174,9 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 	for i := range a_sql_row {
 		ptrs[i] = &a_sql_row[i]
 	}
-	file_is_empty := make([]bool, 0)
-	file_name := make([]string, 0)
-	if dumpmode != "cpy" {
-		for _, v := range tableInfos {
-			var fname string
-			if dumpcompress == "zstd" {
-				fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate+"."+dumpcompress, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", dumpmode)
-			} else {
-				fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", dumpmode)
-			}
-			fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-			if err != nil {
-				log.Printf("can not openfile %s", fname)
-				log.Fatal(err.Error())
-			} else {
-				fh.Close()
-			}
-			file_is_empty = append(file_is_empty, true)
-			file_name = append(file_name, fname)
-		}
-	}
 	a_chunk := <-chunk2read
 	for {
 		if a_chunk.is_done {
-			if und_fh != nil {
-				if zst_enc != nil {
-					zst_enc.Close()
-				}
-				und_fh.Close()
-			}
 			break
 		}
 		if last_tableid != a_chunk.table_id {
@@ -1215,15 +1193,13 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 				cpk++
 			}
 			sql_tab_cols = fmt.Sprintf("`%s`", tableInfos[last_tableid].columnInfos[0].colName)
-			sql_val_cols = "%s"
 			ctab := 1
 			for ctab < len(tableInfos[last_tableid].columnInfos) {
 				sql_tab_cols = sql_tab_cols + "," + fmt.Sprintf("`%s`", tableInfos[last_tableid].columnInfos[ctab].colName)
-				sql_val_cols = sql_val_cols + "," + "%s"
 				ctab++
 			}
-			the_reader_interval_query = fmt.Sprintf("select %s from %s where ( %s ) and ( %s) order by %s ", sql_tab_cols, sql_full_tab_name, sql_cond_lower_pk, sql_cond_upper_pk, sql_pk_cols)
-			the_reader_equality_query = fmt.Sprintf("select %s from %s where ( %s ) order by %s ", sql_tab_cols, sql_full_tab_name, sql_cond_equal_pk, sql_pk_cols)
+			the_reader_interval_query = fmt.Sprintf("select %s from %s where ( %s ) and ( %s) ", sql_tab_cols, sql_full_tab_name, sql_cond_lower_pk, sql_cond_upper_pk)
+			the_reader_equality_query = fmt.Sprintf("select %s from %s where ( %s )           ", sql_tab_cols, sql_full_tab_name, sql_cond_equal_pk)
 			// ------------------------------------------------------------------
 			if prepare_reader_interval_query != nil {
 				_ = prepare_reader_interval_query.Close()
@@ -1253,39 +1229,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 				a_char_info[i] = tableInfos[last_tableid].columnInfos[i].isKindChar
 				a_fract_info[i] = tableInfos[last_tableid].columnInfos[i].haveFract
 			}
-			a_row = make([]any, ctab)
-			// ------------------------------------------------------------------
-			if und_fh != nil {
-				if zst_enc != nil {
-					zst_enc.Close()
-				}
-				und_fh.Close()
-			}
-			if dumpmode != "cpy" {
-				fname := file_name[last_tableid]
-				und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-				if err != nil {
-					log.Printf("can not openfile %s", fname)
-					log.Fatal(err.Error())
-				}
-				if dumpcompress == "zstd" {
-					zst_enc, err = zstd.NewWriter(und_fh, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
-					if err != nil {
-						log.Printf("can not create zstd.NewWriter")
-						log.Fatal(err.Error())
-					}
-				}
-				if file_is_empty[last_tableid] {
-					if dumpheader {
-						if dumpcompress == "zstd" {
-							ChunkReaderDumpHeader(dumpmode, zst_enc, sql_tab_cols)
-						} else {
-							ChunkReaderDumpHeader(dumpmode, und_fh, sql_tab_cols)
-						}
-					}
-					file_is_empty[last_tableid] = false
-				}
-			}
+			a_row = make([]string, ctab)
 			// ------------------------------------------------------------------
 		}
 		// --------------------------------------------------------------------------
@@ -1314,13 +1258,7 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 		}
 		query_row_count := 0
 		// --------------------------------------------------------------------------
-		if dumpcompress == "zstd" {
-			ChunkReaderDumpProcess(dumpmode, q_rows, &query_row_count, a_quote_info, a_fract_info, a_char_info, a_row, a_sql_row, tableInfos[last_tableid], sql_tab_cols, sql_val_cols, ptrs, insert_size, zst_enc, nil)
-		} else if dumpmode == "cpy" {
-			ChunkReaderDumpProcess(dumpmode, q_rows, &query_row_count, a_quote_info, a_fract_info, a_char_info, a_row, a_sql_row, tableInfos[last_tableid], sql_tab_cols, sql_val_cols, ptrs, insert_size, nil, sql2inject)
-		} else {
-			ChunkReaderDumpProcess(dumpmode, q_rows, &query_row_count, a_quote_info, a_fract_info, a_char_info, a_row, a_sql_row, tableInfos[last_tableid], sql_tab_cols, sql_val_cols, ptrs, insert_size, und_fh, nil)
-		}
+		ChunkReaderDumpProcess(dumpmode, q_rows, &query_row_count, a_quote_info, a_fract_info, a_char_info, a_row, a_sql_row, tableInfos[last_tableid], last_tableid, sql_tab_cols, ptrs, insert_size, sql2inject)
 		// --------------------------------------------------------------------------
 		if mode_debug {
 			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\nrows cnt: %d\n", sql_full_tab_name, *the_query, len(sql_vals_pk), sql_vals_pk, query_row_count)
@@ -1340,14 +1278,148 @@ func tableChunkReader(chunk2read chan tablechunk, sql2inject chan *string, adbCo
 }
 
 // ------------------------------------------------------------------------------------------
-func tableCopyWriter(sql2inject chan *string, adbConn sql.Conn, id int) {
+func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataTable, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, z_level int, z_para int) {
+	if dumpcompress == "zstd" {
+		log.Printf("tableFileWriter[%d] start mode %s %s lvl %d conc %d\n", id, dumpmode, dumpcompress, z_level, z_para)
+	} else {
+		log.Printf("tableFileWriter[%d] start mode %s \n", id, dumpmode)
+	}
+	// ----------------------------------------------------------------------------------
+	file_is_empty := make([]bool, 0)
+	file_name := make([]string, 0)
+	for _, v := range tableInfos {
+		var fname string
+		if dumpcompress == "zstd" {
+			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate+"."+dumpcompress, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", dumpmode)
+		} else {
+			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", dumpmode)
+		}
+		fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			log.Printf("can not openfile %s", fname)
+			log.Fatal(err.Error())
+		} else {
+			fh.Close()
+		}
+		file_is_empty = append(file_is_empty, true)
+		file_name = append(file_name, fname)
+	}
+	// ----------------------------------------------------------------------------------
+	var und_fh *os.File
+	var err error
+	last_tableid := -1
+	a_insert_sql := <-sql2inject
+	// ----------------------------
+	if dumpcompress == "zstd" {
+		// --------------------------------------------------------------------------
+		var zst_enc *zstd.Encoder
+		// --------------------------------------------------------------------------
+		for a_insert_sql.sql != nil {
+			// ------------------------------------------------------------------
+			if last_tableid != a_insert_sql.table_id {
+				last_tableid = a_insert_sql.table_id
+				if und_fh != nil {
+					if zst_enc != nil {
+						zst_enc.Close()
+					}
+					und_fh.Close()
+				}
+				fname := file_name[last_tableid]
+				und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				if err != nil {
+					log.Printf("can not openfile %s", fname)
+					log.Fatal(err.Error())
+				}
+				zst_enc, err = zstd.NewWriter(und_fh, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(z_level)), zstd.WithEncoderConcurrency(z_para))
+				if err != nil {
+					log.Printf("can not create zstd.NewWriter")
+					log.Fatal(err.Error())
+				}
+				if file_is_empty[last_tableid] {
+					if dumpheader {
+						var n_pat string
+						if dumpmode == "csv" {
+							n_pat = "%s"
+						} else {
+							n_pat = "`%s`"
+						}
+						sql_tab_cols := fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[0].colName)
+						ctab := 1
+						for ctab < len(tableInfos[last_tableid].columnInfos) {
+							sql_tab_cols = sql_tab_cols + "," + fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[ctab].colName)
+							ctab++
+						}
+						ChunkReaderDumpHeader(dumpmode, zst_enc, sql_tab_cols)
+					}
+					file_is_empty[last_tableid] = false
+				}
+			}
+			// ------------------------------------------------------------------
+			io.WriteString(zst_enc, *a_insert_sql.sql)
+			// ------------------------------------------------------------------
+			a_insert_sql = <-sql2inject
+		}
+		// --------------------------------------------------------------------------
+		if zst_enc != nil {
+			zst_enc.Close()
+		}
+	} else {
+		// --------------------------------------------------------------------------
+		for a_insert_sql.sql != nil {
+			// ------------------------------------------------------------------
+			if last_tableid != a_insert_sql.table_id {
+				last_tableid = a_insert_sql.table_id
+				if und_fh != nil {
+					und_fh.Close()
+				}
+				fname := file_name[last_tableid]
+				und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				if err != nil {
+					log.Printf("can not openfile %s", fname)
+					log.Fatal(err.Error())
+				}
+				if file_is_empty[last_tableid] {
+					if dumpheader {
+						var n_pat string
+						if dumpmode == "csv" {
+							n_pat = "%s"
+						} else {
+							n_pat = "`%s`"
+						}
+						sql_tab_cols := fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[0].colName)
+						ctab := 1
+						for ctab < len(tableInfos[last_tableid].columnInfos) {
+							sql_tab_cols = sql_tab_cols + "," + fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[ctab].colName)
+							ctab++
+						}
+						ChunkReaderDumpHeader(dumpmode, und_fh, sql_tab_cols)
+					}
+					file_is_empty[last_tableid] = false
+				}
+			}
+			// ------------------------------------------------------------------
+			io.WriteString(und_fh, *a_insert_sql.sql)
+			// ------------------------------------------------------------------
+			a_insert_sql = <-sql2inject
+		}
+		// --------------------------------------------------------------------------
+	}
+	if und_fh != nil {
+		und_fh.Close()
+	}
+	// ----------------------------------------------------------------------------------
+	log.Printf("tableFileWriter[%d] finish\n", id)
+}
+
+// ------------------------------------------------------------------------------------------
+func tableCopyWriter(sql2inject chan insertchunk, adbConn sql.Conn, id int) {
 	log.Printf("tableCopyWriter[%d] start\n", id)
 	a_insert_sql := <-sql2inject
-	for a_insert_sql != nil {
+	for a_insert_sql.sql != nil {
 		// --------------------------------------------------------------------------
-		_, e_err := adbConn.ExecContext(context.Background(), *a_insert_sql)
+		_, e_err := adbConn.ExecContext(context.Background(), *a_insert_sql.sql)
 		if e_err != nil {
-			log.Printf("error with :\n%s", *a_insert_sql)
+			log.Printf("error with :\n%s", *a_insert_sql.sql)
 			log.Fatalf("thread %d , can not insert a chunk\n%s\n", id, e_err.Error())
 		}
 		// --------------------------------------------------------------------------
@@ -1394,7 +1466,10 @@ func main() {
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql / cpy ")
 	arg_dumpheader := flag.Bool("dumpheader", true, "add a header on csv/sql")
+	arg_dumpparr := flag.Int("dumpparallel", 5, "number of file writers")
 	arg_dumpcompress := flag.String("dumpcompress", "", "which compression format to use , zstd")
+	arg_dumpcompress_level := flag.Int("dumpcompresslevel", 1, "which zstd compression level ( 1 , 3 , 6 , 11 ) ")
+	arg_dumpcompress_concur := flag.Int("dumpcompressconcur", 4, "which zstd compression concurency ")
 	// ------------
 	var arg_dbs arrayFlags
 	flag.Var(&arg_dbs, "db", "database(s) of tables to dump")
@@ -1452,6 +1527,10 @@ func main() {
 		flag.Usage()
 		os.Exit(9)
 	}
+	if *arg_dumpcompress_level < 1 || *arg_dumpcompress_level > 22 {
+		flag.Usage()
+		os.Exit(9)
+	}
 	if len(*arg_dumpcompress) != 0 && (*arg_dumpcompress == "zstd") && len(*arg_dumpmode) != 0 && *arg_dumpmode == "cpy" {
 		flag.Usage()
 		os.Exit(10)
@@ -1470,6 +1549,8 @@ func main() {
 		os.Exit(12)
 	}
 	mode_debug = *arg_debug
+	zstd_level := *arg_dumpcompress_level
+	zstd_concur := *arg_dumpcompress_concur
 	// ----------------------------------------------------------------------------------
 	var conSrc []sql.Conn
 	var conDst []sql.Conn
@@ -1497,12 +1578,12 @@ func main() {
 	}
 	// ----------------------------------------------------------------------------------
 	var wg sync.WaitGroup
-	var wg_cpy sync.WaitGroup
-	pk_chunks_to_read := make(chan tablechunk, *arg_db_parr*100)
-	sql_to_write := make(chan *string, 10000)
+	var wg_wrt sync.WaitGroup
+	pk_chunks_to_read := make(chan tablechunk, *arg_db_parr*200)
+	sql_to_write := make(chan insertchunk, 20000)
 	if mode_debug {
 		pk_chunks_to_read = make(chan tablechunk, 5)
-		sql_to_write = make(chan *string, 5)
+		sql_to_write = make(chan insertchunk, 5)
 	}
 	// ------------
 	wg.Add(1)
@@ -1516,20 +1597,34 @@ func main() {
 		wg.Add(1)
 		go func(adbConn sql.Conn, id int) {
 			defer wg.Done()
-			tableChunkReader(pk_chunks_to_read, sql_to_write, adbConn, r, id, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, *arg_insert_size)
+			tableChunkReader(pk_chunks_to_read, sql_to_write, adbConn, r, id, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, *arg_insert_size, zstd_level, zstd_concur)
 		}(conSrc[j], j)
 		j++
 		time.Sleep(5 * time.Millisecond)
 	}
 	// ------------
+	writer_cnt := 0
 	if len(conDst) > 0 {
+		writer_cnt = len(conDst)
 		j = 0
-		for j < len(conDst) {
-			wg_cpy.Add(1)
+		for j < writer_cnt {
+			wg_wrt.Add(1)
 			go func(adbConn sql.Conn, id int) {
-				defer wg_cpy.Done()
+				defer wg_wrt.Done()
 				tableCopyWriter(sql_to_write, adbConn, id+len(conSrc))
 			}(conDst[j], j)
+			j++
+			time.Sleep(5 * time.Millisecond)
+		}
+	} else {
+		writer_cnt = *arg_dumpparr
+		j = 0
+		for j < *arg_dumpparr {
+			wg_wrt.Add(1)
+			go func(id int) {
+				defer wg_wrt.Done()
+				tableFileWriter(sql_to_write, id, r, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, zstd_level, zstd_concur)
+			}(j)
 			j++
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -1539,15 +1634,14 @@ func main() {
 	if mode_debug {
 		log.Print("we are done with browser & reader")
 	}
-	if len(conDst) > 0 {
-		j = 0
-		for j < len(conDst) {
-			sql_to_write <- nil
-			j++
-		}
-		log.Printf("we added %d nil pointer to flush copiers", len(conDst))
-		wg_cpy.Wait()
+	// ------------
+	j = 0
+	for j < writer_cnt {
+		sql_to_write <- insertchunk{table_id: 0, sql: nil}
+		j++
 	}
+	log.Printf("we added %d nil pointer to flush writers", writer_cnt)
+	wg_wrt.Wait()
 	// ----------------------------------------------------------------------------------
 	dbSrc.Close()
 	if len(conDst) > 0 {
