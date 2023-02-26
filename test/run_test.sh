@@ -38,6 +38,7 @@ done
 echo "Check  0:"
 for port in 5000 4000
 do
+    echo
     for T in $LIST_TABLES
     do
 	CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port $port  -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
@@ -50,10 +51,6 @@ do
 	echo "port $port table $T count $CNT"
     done
 done
-
-eval
-
-
 
 # test  1 , need args
 eval "$BINARY                                                                                                          $DEBUG_CMD " && echo "Test   1: failure" && exit  1
