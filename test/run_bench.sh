@@ -64,3 +64,8 @@ do
     echo timing paradump csv
     time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m"
 done
+
+if [ -d "$TMPDIR" ]
+then
+    rm -rf "${TMPDIR}"
+fi
