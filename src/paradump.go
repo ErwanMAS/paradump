@@ -1062,7 +1062,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 			arr_ind += 2
 			// ----------------------------------------------------------
 			for n, value := range a_sql_row {
-				if value == nil {
+				if value == nil || !value.Valid {
 					a_row[n] = "null"
 				} else {
 					if a_quote_info[n] {
@@ -1111,7 +1111,7 @@ func ChunkReaderDumpProcess(dumpmode string, q_rows *sql.Rows, query_row_count *
 			*query_row_count++
 			// ----------------------------------------------------------
 			for n, value := range a_sql_row {
-				if value == nil {
+				if value == nil || !value.Valid {
 					if a_char_info[n] {
 						a_row[n] = "\\N"
 					} else {
@@ -1462,7 +1462,7 @@ func main() {
 	arg_db_pasw := flag.String("pwd", "", "the database connection password")
 	arg_db_parr := flag.Int("parallel", 10, "number of workers")
 	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
-	arg_insert_size := flag.Int("insertsize", 100, "rows count for each insert")
+	arg_insert_size := flag.Int("insertsize", 500, "rows count for each insert")
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql / cpy ")
 	arg_dumpheader := flag.Bool("dumpheader", true, "add a header on csv/sql")
