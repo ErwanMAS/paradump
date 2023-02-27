@@ -1214,7 +1214,6 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 		}
 		insert_sql_arr[u_ind] = ");\n"
 		// ------------------------------------------------------------------
-		var sql_tab_cols string
 		var tab_row []string
 		var last_table_id int = -1
 		var tab_meta MetadataTable
@@ -1229,7 +1228,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				last_table_id = a_dta_chunk.table_id
 				tab_meta = tableInfos[last_table_id]
 				col_meta = tab_meta.columnInfos
-				sql_tab_cols = generateListCols4Sql(col_meta)
+				sql_tab_cols := generateListCols4Sql(col_meta)
 				tab_row = make([]string, len(col_meta))
 				if dumpmode == "cpy" {
 					insert_sql_arr[0] = fmt.Sprintf("insert into `%s`.`%s`(%s) values (", tab_meta.dbName, tab_meta.tbName, sql_tab_cols)
