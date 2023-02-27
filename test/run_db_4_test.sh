@@ -46,15 +46,21 @@ do
 
     if [[ "$PRT" -eq 4000 ]]
     then
-	EXTRA_PARAMS=--innodb_adaptive_hash_index_partitions=8
+	EXTRA_PARAMS[0]=--innodb_adaptive_hash_index_partitions=8
     else
-	EXTRA_PARAMS=--innodb_adaptive_hash_index_parts=8
+	EXTRA_PARAMS[0]=--innodb_adaptive_hash_index_parts=8
     fi
-
-    $NEED_SUDO docker run                            --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
-	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=12G --max_connections=600 ${EXTRA_PARAMS} --innodb_buffer_pool_instances=8                                  ||
-	$NEED_SUDO docker run --platform=linux/amd64 --name "${NAM}" -p "${PRT}:3306" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
-	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=12G --max_connections=600 ${EXTRA_PARAMS} --innodb_buffer_pool_instances=8
+    if [[ "$(uname -s)" != "Darwin"  ]]
+    then
+	DCK_NET="--net=host"
+	EXTRA_PARAMS[1]="--port=${PRT}"
+    else
+	DCK_NET="--publish=$PRT:3306"
+    fi
+    $NEED_SUDO docker run                            "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=24G --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8                                  ||
+	$NEED_SUDO docker run --platform=linux/amd64 "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=24G --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
 done
 echo creating database objects
 for V in $SRC_DB=4000 $TGT_DB=5000
