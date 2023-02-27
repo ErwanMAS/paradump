@@ -3,8 +3,10 @@
 cd "$(dirname "$0")"
 
 BINARY=../src/paradump
-
 DB_HOST="127.0.0.1"
+DB_PORTS="4000 5000"
+DCK_MYSQL="$NEED_SUDO docker run --network=host -i mysql/mysql-server:8.0.31  /usr/bin/mysql"
+
 while [[ -n "$1" ]]
 do
     if [[ "$1" = "--debug" ]]
@@ -24,6 +26,18 @@ do
     then
 	DB_HOST="$2"
 	shift 2
+	continue
+    fi
+    if [[ "$1" = "--dbports" && -n "$2" ]]
+    then
+	DB_PORTS="$2"
+	shift 2
+	continue
+    fi
+    if [[ "$1" = "--local-mysql" ]]
+    then
+	DCK_MYSQL="mysql"
+	shift 1
 	continue
     fi
     if [[ -n "$1" ]]
@@ -50,18 +64,16 @@ docker ps -a -q >/dev/null 2>&1 || {
     NEED_SUDO="sudo"
 }
 
-DCK_MYSQL="$NEED_SUDO docker run --network=host -i mysql/mysql-server:8.0.31  /usr/bin/mysql"
-
 TMPDIR=$(mktemp -d )
-for port in 5000 4000
+for port in $DB_PORTS
 do
-    echo timing mysqldump
+    echo "timing mysqldump $port on ${DB_HOST}"
     time bash -c "${DCK_MYSQL}dump  -u root -ptest1234  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --column-statistics=0 foobar > /dev/null"
-    echo timing mysqlpump
+    echo "timing mysqlpump $port on ${DB_HOST}"
     time bash -c "${DCK_MYSQL}pump  -u root -ptest1234  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks   --no-create-info --no-create-db          --databases foobar > /dev/null"
-    echo timing paradump sql
+    echo "timing paradump sql $port on ${DB_HOST}"
     time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m" 
-    echo timing paradump csv
+    echo "timing paradump csv $port on ${DB_HOST}"
     time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m"
 done
 
