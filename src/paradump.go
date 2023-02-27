@@ -1036,8 +1036,7 @@ func ChunkReaderDumpProcess(q_rows *sql.Rows, query_row_count *int, a_sql_row []
 			if value == nil || !value.Valid {
 				a_simple_row[n] = nil
 			} else {
-				a_str := strings.Clone(value.String)
-				a_simple_row[n] = &a_str
+				a_simple_row[n] = &value.String
 			}
 		}
 		// ------------------------------------------------------------------
