@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"os"
 	"reflect"
 	"strconv"
@@ -372,6 +373,7 @@ type columnInfo struct {
 	haveFract    bool
 	isKindChar   bool
 	isKindBinary bool
+	isKindFloat  bool
 }
 
 type indexInfo struct {
@@ -452,6 +454,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		a_col.isKindChar = (a_col.colType == "char" || a_col.colType == "longtext" || a_col.colType == "mediumtext" || a_col.colType == "text" || a_col.colType == "tinytext" || a_col.colType == "varchar")
 		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" || a_col.colType == "bit")
 		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
+		a_col.isKindFloat = (a_col.colType == "float" || a_col.colType == "double")
 		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_int > 0)
 		result.columnInfos = append(result.columnInfos, a_col)
 	}
@@ -892,7 +895,9 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 				_ = prepare_finish_query.Close()
 			}
 		}
-		log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row, sizeofchunk)
+		if mode_debug {
+			log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row, sizeofchunk)
+		}
 		// ------------------------------------------------------------------
 		var chunk_id int64 = 0
 		if mode_debug {
@@ -1060,10 +1065,12 @@ func ChunkReaderDumpProcess(q_rows *sql.Rows, query_row_count *int, a_sql_row []
 
 // ------------------------------------------------------------------------------------------
 func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn sql.Conn, tableInfos []MetadataTable, id int, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, insert_size int, z_level int, z_para int) {
-	if dumpcompress == "zstd" {
-		log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s %d %d\n", id, insert_size, dumpmode, dumpcompress, z_level, z_para)
-	} else {
-		log.Printf("tableChunkReader[%d] start with insert size %d / mode %s \n", id, insert_size, dumpmode)
+	if mode_debug {
+		if dumpcompress == "zstd" {
+			log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s %d %d\n", id, insert_size, dumpmode, dumpcompress, z_level, z_para)
+		} else {
+			log.Printf("tableChunkReader[%d] start with insert size %d / mode %s \n", id, insert_size, dumpmode)
+		}
 	}
 	var last_tableid int = -1
 	var sql_cond_lower_pk string
@@ -1173,7 +1180,9 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 		_ = prepare_reader_equality_query.Close()
 	}
 	// ----------------------------------------------------------------------------------
-	log.Printf("tableChunkReader[%d] finish\n", id)
+	if mode_debug {
+		log.Printf("tableChunkReader[%d] finish\n", id)
+	}
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1188,7 +1197,7 @@ func generateListCols4Sql(col_inf []columnInfo) string {
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int) {
+func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, dumpinsertwithcol string, sql2inject chan insertchunk, insert_size int) {
 	// ----------------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
 		// ------------------------------------------------------------------
@@ -1231,9 +1240,13 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				sql_tab_cols := generateListCols4Sql(col_meta)
 				tab_row = make([]string, len(col_meta))
 				if dumpmode == "cpy" {
-					insert_sql_arr[0] = fmt.Sprintf("insert into `%s`.`%s`(%s) values (", tab_meta.dbName, tab_meta.tbName, sql_tab_cols)
+					insert_sql_arr[0] = fmt.Sprintf("INSERT INTO `%s`.`%s`(%s) VALUES (", tab_meta.dbName, tab_meta.tbName, sql_tab_cols)
 				} else {
-					insert_sql_arr[0] = fmt.Sprintf("insert into `%s`(%s) values (", tab_meta.tbName, sql_tab_cols)
+					if dumpinsertwithcol == "full" {
+						insert_sql_arr[0] = fmt.Sprintf("INSERT INTO `%s`(%s) VALUES (", tab_meta.tbName, sql_tab_cols)
+					} else {
+						insert_sql_arr[0] = fmt.Sprintf("INSERT INTO `%s` VALUES (", tab_meta.tbName)
+					}
 				}
 			}
 			arr_ind := -1
@@ -1243,7 +1256,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				// -------------------------------------------------
 				for n, value := range a_basic_row {
 					if value == nil {
-						tab_row[n] = "null"
+						tab_row[n] = "NULL"
 					} else {
 						if col_meta[n].mustBeQuote {
 							if strings.ContainsAny(*value, "\\\u0000\n\r\"'") {
@@ -1258,7 +1271,17 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 								tab_row[n] = "'" + *value + "'"
 							}
 						} else {
-							tab_row[n] = *value
+							if col_meta[n].isKindFloat {
+								var f_prec uint = 24
+								if col_meta[n].colType == "double" {
+									f_prec = 53
+								}
+								f := new(big.Float).SetPrec(f_prec)
+								f.SetString(*value)
+								tab_row[n] = f.Text('f', -1)
+							} else {
+								tab_row[n] = *value
+							}
 						}
 					}
 				}
@@ -1340,10 +1363,12 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 
 // ------------------------------------------------------------------------------------------
 func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataTable, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, z_level int, z_para int) {
-	if dumpcompress == "zstd" {
-		log.Printf("tableFileWriter[%d] start mode %s %s lvl %d conc %d\n", id, dumpmode, dumpcompress, z_level, z_para)
-	} else {
-		log.Printf("tableFileWriter[%d] start mode %s \n", id, dumpmode)
+	if mode_debug {
+		if dumpcompress == "zstd" {
+			log.Printf("tableFileWriter[%d] start mode %s %s lvl %d conc %d\n", id, dumpmode, dumpcompress, z_level, z_para)
+		} else {
+			log.Printf("tableFileWriter[%d] start mode %s \n", id, dumpmode)
+		}
 	}
 	// ----------------------------------------------------------------------------------
 	file_is_empty := make([]bool, 0)
@@ -1469,12 +1494,16 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 		und_fh.Close()
 	}
 	// ----------------------------------------------------------------------------------
-	log.Printf("tableFileWriter[%d] finish\n", id)
+	if mode_debug {
+		log.Printf("tableFileWriter[%d] finish\n", id)
+	}
 }
 
 // ------------------------------------------------------------------------------------------
 func tableCopyWriter(sql2inject chan insertchunk, adbConn sql.Conn, id int) {
-	log.Printf("tableCopyWriter[%d] start\n", id)
+	if mode_debug {
+		log.Printf("tableCopyWriter[%d] start\n", id)
+	}
 	a_insert_sql := <-sql2inject
 	for a_insert_sql.sql != nil {
 		// --------------------------------------------------------------------------
@@ -1486,7 +1515,9 @@ func tableCopyWriter(sql2inject chan insertchunk, adbConn sql.Conn, id int) {
 		// --------------------------------------------------------------------------
 		a_insert_sql = <-sql2inject
 	}
-	log.Printf("tableCopyWriter[%d] finish\n", id)
+	if mode_debug {
+		log.Printf("tableCopyWriter[%d] finish\n", id)
+	}
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1527,6 +1558,7 @@ func main() {
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql / cpy ")
 	arg_dumpheader := flag.Bool("dumpheader", true, "add a header on csv/sql")
+	arg_dumpinsert := flag.String("dumpinsert", "full", "specify column names on insert , full /simple ")
 	arg_dumpparr := flag.Int("dumpparallel", 5, "number of file writers")
 	arg_dumpcompress := flag.String("dumpcompress", "", "which compression format to use , zstd")
 	arg_dumpcompress_level := flag.Int("dumpcompresslevel", 1, "which zstd compression level ( 1 , 3 , 6 , 11 ) ")
@@ -1692,27 +1724,31 @@ func main() {
 		wg_gen.Add(1)
 		go func(id int) {
 			defer wg_gen.Done()
-			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, sql_to_write, *arg_insert_size)
+			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, *arg_dumpinsert, sql_to_write, *arg_insert_size)
 		}(j)
 		time.Sleep(5 * time.Millisecond)
 	}
 	// ------------
 	wg.Wait()
-	if mode_debug {
-		log.Print("we are done with browser & reader")
-	}
+	log.Print("we are done with browser & reader")
 	// ------------
 	for j := 0; j < gener_cnt; j++ {
 		sql_generator <- datachunk{table_id: -1, rows: nil}
 	}
-	log.Printf("we added %d nil pointer to flush generators", gener_cnt)
+	if mode_debug {
+		log.Printf("we added %d nil pointer to flush generators", gener_cnt)
+	}
 	wg_gen.Wait()
+	log.Print("we are done with generators")
 	// ------------
 	for j := 0; j < writer_cnt; j++ {
 		sql_to_write <- insertchunk{table_id: 0, sql: nil}
 	}
-	log.Printf("we added %d nil pointer to flush writers", writer_cnt)
+	if mode_debug {
+		log.Printf("we added %d nil pointer to flush writers", writer_cnt)
+	}
 	wg_wrt.Wait()
+	log.Print("we are done with writers")
 	// ----------------------------------------------------------------------------------
 	dbSrc.Close()
 	if len(conDst) > 0 {
