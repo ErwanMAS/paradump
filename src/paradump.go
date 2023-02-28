@@ -1259,9 +1259,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						tab_row[n] = "NULL"
 					} else {
 						if col_meta[n].mustBeQuote {
-							if strings.ContainsAny(*value, "\\\u0000\n\r\"'") {
+							if strings.ContainsAny(*value, "\\\u0000\u001a\n\r\"'") {
 								v := strings.ReplaceAll(*value, "\\", "\\\\")
 								v = strings.ReplaceAll(v, "\u0000", "\\0")
+								v = strings.ReplaceAll(v, "\u001a", "\\Z")
 								v = strings.ReplaceAll(v, "\n", "\\n")
 								v = strings.ReplaceAll(v, "\r", "\\r")
 								v = strings.ReplaceAll(v, "'", "\\'")
