@@ -66,7 +66,10 @@ import (
    https://github.com/JamesStewy/go-mysqldump
    ------------------------------------------------------------------------------------------ */
 // ------------------------------------------------------------------------------------------
-var mode_debug bool
+var (
+	mode_debug bool
+	mode_trace bool
+)
 
 // ------------------------------------------------------------------------------------------
 type InfoMysqlPosition struct {
@@ -1154,7 +1157,7 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 				// ----------------------------------------------------------
 				if empty_slot == -1 {
 					tabReadingVars[lru_slot].interval_prepared_stmt.Close()
-					tabReadingVars[lru_slot].interval_prepared_stmt.Close()
+					tabReadingVars[lru_slot].equality_prepared_stmt.Close()
 					tabReadingVars[lru_slot] = nil
 					empty_slot = lru_slot
 				}
@@ -1175,12 +1178,14 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 				var p_err error
 				new_info.interval_prepared_stmt, p_err = adbConn.PrepareContext(ctx, new_info.interval_query)
 				if p_err != nil {
+					log.Printf("tableChunkReader[%02d] finish cntreadchunk:%9d last_hit: %9d cache_hit: %9d cache_miss:%9d\n", id, cntreadchunk, last_hit, cache_hit, cache_miss)
 					log.Fatalf("can not prepare to read a chunk ( %s )\n%s", new_info.interval_query, p_err.Error())
 				}
 				ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 				new_info.equality_prepared_stmt, p_err = adbConn.PrepareContext(ctx, new_info.equality_query)
 				if p_err != nil {
-					log.Fatalf("can not prepare to read one pk ( %s )\n%s", new_info.equality_query, p_err.Error())
+					log.Printf("tableChunkReader[%02d] finish cntreadchunk:%9d last_hit: %9d cache_hit: %9d cache_miss:%9d\n", id, cntreadchunk, last_hit, cache_hit, cache_miss)
+					log.Fatalf("can not prepare to read a chunk of one pk ( %s )\n%s", new_info.equality_query, p_err.Error())
 				}
 				// ------------------------------------------------------------------
 				new_info.a_sql_row = make([]sql.NullString, tableInfos[a_chunk.table_id].cntCols)
@@ -1239,7 +1244,7 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 	for _, value := range tabReadingVars {
 		if value != nil {
 			value.interval_prepared_stmt.Close()
-			value.interval_prepared_stmt.Close()
+			value.equality_prepared_stmt.Close()
 		}
 	}
 	// ----------------------------------------------------------------------------------
@@ -1627,6 +1632,7 @@ func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds)
 	// ----------------------------------------------------------------------------------
 	arg_debug := flag.Bool("debug", false, "debug mode")
+	arg_trace := flag.Bool("trace", false, "trace mode")
 	arg_loop := flag.Int("loopcnt", 1, "how many times we are going to loop (for debugging)")
 	// ----------------------------------------------------------------------------------
 	arg_db_port := flag.Int("port", 3306, "the database port")
@@ -1723,7 +1729,12 @@ func main() {
 		flag.Usage()
 		os.Exit(12)
 	}
-	mode_debug = *arg_debug
+	mode_trace = *arg_trace
+	if mode_trace {
+		mode_debug = true
+	} else {
+		mode_debug = *arg_debug
+	}
 	zstd_level := *arg_dumpcompress_level
 	zstd_concur := *arg_dumpcompress_concur
 	// ----------------------------------------------------------------------------------
@@ -1768,6 +1779,11 @@ func main() {
 		sql_to_write = make(chan insertchunk, 5)
 		sql_generator = make(chan datachunk, 5)
 	}
+	if mode_trace {
+		pk_chunks_to_read = make(chan tablechunk, 1)
+		sql_to_write = make(chan insertchunk, 1)
+		sql_generator = make(chan datachunk, 1)
+	}
 	// ------------
 	for l := 0; l < *arg_loop; l++ {
 		for t := 0; t < len(tables2dump); t++ {
@@ -1786,13 +1802,13 @@ func main() {
 		}(conSrc[j], j)
 	}
 	// ------------
-	for j := cntBrowser; j < cntReader+cntBrowser-1; j++ {
+	for j := 0; j < cntReader; j++ {
 		time.Sleep(10 * time.Millisecond)
 		wg_red.Add(1)
 		go func(adbConn sql.Conn, id int) {
 			defer wg_red.Done()
 			tableChunkReader(pk_chunks_to_read, sql_generator, adbConn, r, id, *arg_insert_size, cntBrowser)
-		}(conSrc[j], j)
+		}(conSrc[j+cntBrowser], j)
 	}
 	// ------------
 	writer_cnt := 0
