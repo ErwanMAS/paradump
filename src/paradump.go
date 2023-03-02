@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/big"
 	"os"
 	"reflect"
@@ -42,6 +43,9 @@ import (
    ------------------------------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------------------------------
+   https://go.dev/blog/strings
+
+   https://go.dev/blog/slices
 
    http://go-database-sql.org/importing.html
 
@@ -388,15 +392,23 @@ type aTable struct {
 }
 
 type MetadataTable struct {
-	dbName         string
-	tbName         string
-	cntRows        int64
-	storageEng     string
-	columnInfos    []columnInfo
-	primaryKey     []string
-	Indexes        []indexInfo
-	fakePrimaryKey bool
-	onError        int
+	dbName                        string
+	tbName                        string
+	cntRows                       int64
+	storageEng                    string
+	cntCols                       int
+	cntPkCols                     int
+	columnInfos                   []columnInfo
+	primaryKey                    []string
+	Indexes                       []indexInfo
+	fakePrimaryKey                bool
+	onError                       int
+	fullName                      string
+	query_for_reader_interval     string
+	param_indices_interval_lo_qry []int
+	param_indices_interval_up_qry []int
+	query_for_reader_equality     string
+	param_indices_equality_qry    []int
 }
 
 // ------------------------------------------------------------------------------------------
@@ -580,7 +592,23 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			}
 		}
 	}
+	// ---------------------------------------------------------------------------------
+	result.fullName = fmt.Sprintf("`%s`.`%s`", result.dbName, result.tbName)
 
+	sql_cond_lower_pk, qry_indices_lo_bound := generatePredicat(result.primaryKey, true)
+	sql_cond_upper_pk, qry_indices_up_bound := generatePredicat(result.primaryKey, false)
+	sql_cond_equal_pk, qry_indices_equality := generateEqualityPredicat(result.primaryKey)
+	sql_tab_cols := generateListCols4Sql(result.columnInfos)
+	result.query_for_reader_equality = fmt.Sprintf("/* paradump */ select %s from %s where ( %s )           ", sql_tab_cols, result.fullName, sql_cond_equal_pk)
+	result.param_indices_equality_qry = qry_indices_equality
+	result.query_for_reader_interval = fmt.Sprintf("/* paradump */ select %s from %s where ( %s ) and ( %s) ", sql_tab_cols, result.fullName, sql_cond_lower_pk, sql_cond_upper_pk)
+	result.param_indices_interval_lo_qry = qry_indices_lo_bound
+	result.param_indices_interval_up_qry = qry_indices_up_bound
+
+	result.cntCols = len(result.columnInfos)
+	result.cntPkCols = len(result.primaryKey)
+
+	// ---------------------------------------------------------------------------------
 	return result, true
 }
 
@@ -695,15 +723,26 @@ type tablechunk struct {
 }
 
 // ------------------------------------------------------------------------------------------
+type colchunk struct {
+	kind int
+	val  *string
+}
+
+type rowchunk struct {
+	cols []colchunk
+}
+
 type datachunk struct {
 	table_id int
 	usedlen  int
-	rows     [][]*string
+	chunk_id int64
+	rows     []*rowchunk
 }
 
 // ------------------------------------------------------------------------------------------
 type insertchunk struct {
 	table_id int
+	chunk_id int64
 	sql      *string
 }
 
@@ -770,8 +809,10 @@ func generateEqualityPredicat(pkeyCols []string) (string, []int) {
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64, readers_cnt int, loop_cnt int) {
-	log.Printf("tableChunkBrowser  start\n")
+func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64) {
+	if mode_debug {
+		log.Printf("tableChunkBrowser [%02d] start\n", id)
+	}
 	var sizeofchunk int64
 	var must_prepare_query bool
 
@@ -780,9 +821,12 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 	if p_err != nil {
 		log.Fatal("can not ping")
 	}
-	j := 0
-	format_cnt_table := " %0" + fmt.Sprintf("%d", len(fmt.Sprintf("%d", len(tableInfos)))) + "d/" + fmt.Sprintf("%d ", len(tableInfos))
-	for j < len(tableInfos) {
+	format_cnt_table := " %0" + fmt.Sprintf("%d", len(fmt.Sprintf("%d", len(tableInfos)))) + "d "
+	for {
+		j := <-tableidstoscan
+		if j == -1 {
+			break
+		}
 		sizeofchunk = sizeofchunk_init
 		sql_lst_pk_cols := fmt.Sprintf("`%s`", tableInfos[j].primaryKey[0])
 		c := 1
@@ -828,19 +872,14 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			row_cnt++
 		}
 		if row_cnt == 0 {
-			log.Printf("table %s is empty \n", sql_full_tab_name)
-			j++
-			if j == len(tableInfos) && loop_cnt > 1 {
-				loop_cnt--
-				j = 0
-			}
+			log.Printf("table["+format_cnt_table+"] %s is empty \n", j, sql_full_tab_name)
 			continue
 		}
 		start_pk_row := make([]string, c)
 		for n, value := range a_sql_row {
 			start_pk_row[n] = value.String
 		}
-		log.Printf("table["+format_cnt_table+"] %s first pk ( %s ) - start scan pk %s\n", j+1, sql_full_tab_name, sql_lst_pk_cols, start_pk_row)
+		log.Printf("table["+format_cnt_table+"] %s first pk ( %s ) - start scan pk %s\n", j, sql_full_tab_name, sql_lst_pk_cols, start_pk_row)
 		// --------------------------------------------------------------------------
 		sql_cond_pk, sql_val_indices_pk := generatePredicat(tableInfos[j].primaryKey, true)
 		var sql_order_pk_cols string
@@ -899,7 +938,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row, sizeofchunk)
 		}
 		// ------------------------------------------------------------------
-		var chunk_id int64 = 0
+		var chunk_id int64 = 100000000 * (int64(j) + 1)
 		if mode_debug {
 			log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 		}
@@ -974,7 +1013,7 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			}
 			// ------------------------------------------------------------------
 		}
-		log.Printf("table scan is done for %s , pk col ( %s ) scan size pk %d last pk %s\n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row)
+		log.Printf("table["+format_cnt_table+"] %s scan is done , pk col ( %s ) scan size pk %d last pk %s\n", j, sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row)
 		// --------------------------------------------------------------------------
 		chunk_id++
 		var a_chunk tablechunk
@@ -990,23 +1029,9 @@ func tableChunkBrowser(adbConn sql.Conn, tableInfos []MetadataTable, chunk2read 
 			_ = prepare_finish_query.Close()
 		}
 		// --------------------------------------------------------------------------
-		j++
-		if j == len(tableInfos) && loop_cnt > 1 {
-			loop_cnt--
-			j = 0
-		}
 	}
-	log.Printf("tableChunkBrowser finish\n")
-	// ----------------------------------------------------------------------------------
-	var a_chunk tablechunk
-	a_chunk.table_id = -1
-	a_chunk.chunk_id = -1
-	a_chunk.begin_val = make([]string, 0)
-	a_chunk.end_val = make([]string, 0)
-	a_chunk.begin_equal_end = false
-	a_chunk.is_done = true
-	for j = 0; j < readers_cnt; j++ {
-		chunk2read <- a_chunk
+	if mode_debug {
+		log.Printf("tableChunkBrowser [%02d] finish\b", id)
 	}
 	// ----------------------------------------------------------------------------------
 }
@@ -1023,165 +1048,204 @@ func ChunkReaderDumpHeader(dumpmode string, cur_iow io.Writer, sql_tab_cols stri
 }
 
 // ------------------------------------------------------------------------------------------
-func ChunkReaderDumpProcess(q_rows *sql.Rows, query_row_count *int, a_sql_row []*sql.NullString, a_table_info MetadataTable, tab_id int, col_cnt int, ptrs []any, insert_size int, chan2gen chan datachunk) {
+func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_sql_row *[]sql.NullString, a_table_info *MetadataTable, tab_id int, chk_id int64, ptrs *[]any, insert_size int, chan2gen chan datachunk) {
 	// --------------------------------------------------------------------------
 	var a_dta_chunk datachunk
-	a_dta_chunk = datachunk{table_id: tab_id, rows: make([][]*string, insert_size)}
+	a_dta_chunk = datachunk{usedlen: 0, chunk_id: chk_id, table_id: tab_id, rows: make([]*rowchunk, insert_size)}
 	row_cnt := 0
-
+	if mode_debug {
+		log.Printf("ChunkReaderDumpProcess [%02d] table %03d chunk %12d \n", threadid, tab_id, chk_id)
+	}
 	for q_rows.Next() {
-		err := q_rows.Scan(ptrs...)
+		err := q_rows.Scan(*ptrs...)
 		if err != nil {
-			log.Printf("can not scan %s ( already scan %d + %d ) , len(ptrs) = %d , cols %s ", a_table_info.tbName, *query_row_count, row_cnt, len(ptrs))
+			log.Printf("can not scan %s ( already scan %d ) , len(ptrs) = %d , cols %s ", a_table_info.tbName, row_cnt, len(*ptrs))
 			log.Fatal(err)
 		}
-		a_simple_row := make([]*string, col_cnt)
+		var a_simple_row rowchunk
+		a_simple_row.cols = make([]colchunk, a_table_info.cntCols)
 		// ------------------------------------------------------------------
-		for n, value := range a_sql_row {
-			if value == nil || !value.Valid {
-				a_simple_row[n] = nil
+		for n, value := range *a_sql_row {
+			if !value.Valid {
+				a_simple_row.cols[n].kind = -1
 			} else {
-				a_simple_row[n] = &value.String
+				a_simple_row.cols[n].kind = 999
+				a_str := value.String
+				a_simple_row.cols[n].val = &a_str
 			}
 		}
 		// ------------------------------------------------------------------
-		a_dta_chunk.rows[row_cnt] = a_simple_row
+		a_dta_chunk.rows[row_cnt] = &a_simple_row
 		row_cnt++
 		// ------------------------------------------------------------------
 		if row_cnt >= insert_size {
 			a_dta_chunk.usedlen = row_cnt
 			chan2gen <- a_dta_chunk
-			*query_row_count += row_cnt
 			row_cnt = 0
-			a_dta_chunk = datachunk{table_id: tab_id, rows: make([][]*string, insert_size)}
+			a_dta_chunk = datachunk{usedlen: 0, table_id: tab_id, chunk_id: chk_id, rows: make([]*rowchunk, insert_size)}
 		}
 	}
 	if row_cnt > 0 {
 		a_dta_chunk.usedlen = row_cnt
 		chan2gen <- a_dta_chunk
-		*query_row_count += row_cnt
 	}
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn sql.Conn, tableInfos []MetadataTable, id int, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, insert_size int, z_level int, z_para int) {
+type cacheTableChunkReader struct {
+	table_id               int
+	lastusagecnt           int
+	fullname               string
+	indices_lo_pk          []int
+	indices_up_pk          []int
+	indices_equal_pk       []int
+	interval_query         string
+	equality_query         string
+	interval_prepared_stmt *sql.Stmt
+	equality_prepared_stmt *sql.Stmt
+	a_sql_row              []sql.NullString
+	ptrs                   []any
+}
+
+// ------------------------------------------------------------------------------------------
+func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn sql.Conn, tableInfos []MetadataTable, id int, insert_size int, cntBrowser int) {
 	if mode_debug {
-		if dumpcompress == "zstd" {
-			log.Printf("tableChunkReader[%d] start with insert size %d / mode %s %s %d %d\n", id, insert_size, dumpmode, dumpcompress, z_level, z_para)
-		} else {
-			log.Printf("tableChunkReader[%d] start with insert size %d / mode %s \n", id, insert_size, dumpmode)
-		}
+		log.Printf("tableChunkReader[%02d] start with insert size %d\n", id, insert_size)
 	}
-	var last_tableid int = -1
-	var sql_cond_lower_pk string
-	var sql_cond_upper_pk string
-	var sql_cond_equal_pk string
-	var sql_val_indices_pk []int
-	var sql_val_indices_equal_pk []int
-	var sql_full_tab_name string
-	var sql_pk_cols string
-	var the_reader_interval_query string
-	var the_reader_equality_query string
-	var prepare_reader_interval_query *sql.Stmt
-	var prepare_reader_equality_query *sql.Stmt
-	var p_err error
-	cols_cnt := 0
-	a_sql_row := make([]*sql.NullString, 1)
-	ptrs := make([]any, 1)
-	for i := range a_sql_row {
-		ptrs[i] = &a_sql_row[i]
-	}
-	a_chunk := <-chunk2read
+	var cntreadchunk int = 0
+	var last_hit int = 0
+	var cache_hit int = 0
+	var cache_miss int = 0
+
+	var tabReadingVars []*cacheTableChunkReader
+
+	var last_table *cacheTableChunkReader
+
+	tabReadingVars = make([]*cacheTableChunkReader, cntBrowser+1)
+
 	for {
+		a_chunk := <-chunk2read
 		if a_chunk.is_done {
 			break
 		}
-		if last_tableid != a_chunk.table_id {
+		cntreadchunk++
+
+		if last_table == nil || last_table.table_id != a_chunk.table_id {
 			// ------------------------------------------------------------------
-			last_tableid = a_chunk.table_id
-			sql_cond_lower_pk, _ = generatePredicat(tableInfos[last_tableid].primaryKey, true)
-			sql_cond_upper_pk, sql_val_indices_pk = generatePredicat(tableInfos[last_tableid].primaryKey, false)
-			sql_cond_equal_pk, sql_val_indices_equal_pk = generateEqualityPredicat(tableInfos[last_tableid].primaryKey)
-			sql_full_tab_name = fmt.Sprintf("`%s`.`%s`", tableInfos[last_tableid].dbName, tableInfos[last_tableid].tbName)
-			sql_pk_cols = fmt.Sprintf("`%s`", tableInfos[last_tableid].primaryKey[0])
-			cpk := 1
-			for cpk < len(tableInfos[last_tableid].primaryKey) {
-				sql_pk_cols = sql_pk_cols + "," + fmt.Sprintf("`%s`", tableInfos[last_tableid].primaryKey[cpk])
-				cpk++
+			var tab_found int = -1
+			var empty_slot int = -1
+			var lru_slot int = -1
+			var lru_val int = math.MaxInt
+			for n, value := range tabReadingVars {
+				if value == nil {
+					empty_slot = n
+				} else if value.table_id == a_chunk.table_id {
+					tab_found = n
+					break
+				} else {
+					if value.lastusagecnt < lru_val {
+						lru_val = value.lastusagecnt
+						lru_slot = n
+					}
+				}
 			}
-			sql_tab_cols := generateListCols4Sql(tableInfos[last_tableid].columnInfos)
-			cols_cnt = len(tableInfos[last_tableid].columnInfos)
-			the_reader_interval_query = fmt.Sprintf("select %s from %s where ( %s ) and ( %s) ", sql_tab_cols, sql_full_tab_name, sql_cond_lower_pk, sql_cond_upper_pk)
-			the_reader_equality_query = fmt.Sprintf("select %s from %s where ( %s )           ", sql_tab_cols, sql_full_tab_name, sql_cond_equal_pk)
-			// ------------------------------------------------------------------
-			if prepare_reader_interval_query != nil {
-				_ = prepare_reader_interval_query.Close()
+			if tab_found == -1 {
+				cache_miss++
+				// ----------------------------------------------------------
+				if empty_slot == -1 {
+					tabReadingVars[lru_slot].interval_prepared_stmt.Close()
+					tabReadingVars[lru_slot].interval_prepared_stmt.Close()
+					tabReadingVars[lru_slot] = nil
+					empty_slot = lru_slot
+				}
+				// ----------------------------------------------------------
+				var new_info cacheTableChunkReader
+
+				new_info.table_id = a_chunk.table_id
+				new_info.lastusagecnt = cntreadchunk
+
+				new_info.fullname = tableInfos[a_chunk.table_id].fullName
+				new_info.interval_query = tableInfos[a_chunk.table_id].query_for_reader_interval
+				new_info.equality_query = tableInfos[a_chunk.table_id].query_for_reader_equality
+				new_info.indices_lo_pk = tableInfos[a_chunk.table_id].param_indices_interval_lo_qry
+				new_info.indices_up_pk = tableInfos[a_chunk.table_id].param_indices_interval_up_qry
+				new_info.indices_equal_pk = tableInfos[a_chunk.table_id].param_indices_equality_qry
+				// ------------------------------------------------------------------
+				ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+				var p_err error
+				new_info.interval_prepared_stmt, p_err = adbConn.PrepareContext(ctx, new_info.interval_query)
+				if p_err != nil {
+					log.Fatalf("can not prepare to read a chunk ( %s )\n%s", new_info.interval_query, p_err.Error())
+				}
+				ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+				new_info.equality_prepared_stmt, p_err = adbConn.PrepareContext(ctx, new_info.equality_query)
+				if p_err != nil {
+					log.Fatalf("can not prepare to read one pk ( %s )\n%s", new_info.equality_query, p_err.Error())
+				}
+				// ------------------------------------------------------------------
+				new_info.a_sql_row = make([]sql.NullString, tableInfos[a_chunk.table_id].cntCols)
+				new_info.ptrs = make([]any, tableInfos[a_chunk.table_id].cntCols)
+				for i := 0; i < tableInfos[a_chunk.table_id].cntCols; i++ {
+					new_info.ptrs[i] = &new_info.a_sql_row[i]
+				}
+				// ------------------------------------------------------------------
+				tabReadingVars[empty_slot] = &new_info
+				last_table = &new_info
+			} else {
+				cache_hit++
+				last_table = tabReadingVars[tab_found]
+				last_table.lastusagecnt = cntreadchunk
 			}
-			if prepare_reader_equality_query != nil {
-				_ = prepare_reader_equality_query.Close()
-			}
-			ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
-			prepare_reader_interval_query, p_err = adbConn.PrepareContext(ctx, the_reader_interval_query)
-			if p_err != nil {
-				log.Fatalf("can not prepare to read a chunk ( %s )\n%s", the_reader_interval_query, p_err.Error())
-			}
-			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-			prepare_reader_equality_query, p_err = adbConn.PrepareContext(ctx, the_reader_equality_query)
-			if p_err != nil {
-				log.Fatalf("can not prepare to read one pk ( %s )\n%s", the_reader_equality_query, p_err.Error())
-			}
-			// ------------------------------------------------------------------
-			a_sql_row = make([]*sql.NullString, cols_cnt)
-			ptrs = make([]any, cols_cnt)
-			for i := range a_sql_row {
-				ptrs[i] = &a_sql_row[i]
-			}
-			// ------------------------------------------------------------------
+		} else {
+			last_hit++
 		}
 		// --------------------------------------------------------------------------
-		// log.Printf("[%02d] table %03d chunk %06d %s -> %s\n",id,a_chunk.table_id,a_chunk.chunk_id,a_chunk.begin_val,a_chunk.end_val)
+		if mode_debug {
+			log.Printf("tableChunkReader[%02d] table %03d chunk %12d %s -> %s\n", id, a_chunk.table_id, a_chunk.chunk_id, a_chunk.begin_val, a_chunk.end_val)
+		}
 		// --------------------------------------------------------------------------
 		var sql_vals_pk []any
 		var the_query *string
 		var prepared_query *sql.Stmt
 		if a_chunk.begin_equal_end {
-			sql_vals_pk = generateValuesForPredicat(sql_val_indices_equal_pk, a_chunk.begin_val)
-			the_query = &the_reader_equality_query
-			prepared_query = prepare_reader_equality_query
+			sql_vals_pk = generateValuesForPredicat(last_table.indices_equal_pk, a_chunk.begin_val)
+			the_query = &last_table.equality_query
+			prepared_query = last_table.equality_prepared_stmt
 		} else {
-			sql_vals_pk = generateValuesForPredicat(sql_val_indices_pk, a_chunk.begin_val)
-			sql_vals_pk = append(sql_vals_pk, generateValuesForPredicat(sql_val_indices_pk, a_chunk.end_val)...)
-			the_query = &the_reader_interval_query
-			prepared_query = prepare_reader_interval_query
+			sql_vals_pk = generateValuesForPredicat(last_table.indices_lo_pk, a_chunk.begin_val)
+			sql_vals_pk = append(sql_vals_pk, generateValuesForPredicat(last_table.indices_up_pk, a_chunk.end_val)...)
+			the_query = &last_table.interval_query
+			prepared_query = last_table.interval_prepared_stmt
 		}
 		q_rows, q_err := prepared_query.Query(sql_vals_pk...)
 		if q_err != nil {
-			log.Printf("table %s chunk id: %d chunk query :  %s \n with %d params\nval for query: %s\n", sql_full_tab_name, a_chunk.chunk_id, *the_query, len(sql_vals_pk), sql_vals_pk)
-			log.Fatalf("can not query table %s to read the chunks\n%s", sql_full_tab_name, sql_vals_pk, q_err.Error())
+			log.Printf("table %s chunk id: %12d chunk query :  %s \n with %d params\nval for query: %s\n", last_table.fullname, a_chunk.chunk_id, *the_query, len(sql_vals_pk), sql_vals_pk)
+			log.Printf("ind lo: %s  ind up: %s", last_table.indices_lo_pk, last_table.indices_up_pk)
+			log.Fatalf("can not query table %s to read the chunks\n%s", last_table.fullname, sql_vals_pk, q_err.Error())
 		}
 		if mode_debug {
-			log.Printf("table %s chunk id: %d chunk query :  %s \n with %d params\nval for query: %s\n", sql_full_tab_name, a_chunk.chunk_id, *the_query, len(sql_vals_pk), sql_vals_pk)
+			log.Printf("table %s chunk id: %12d chunk query :  %s \n with %d params\nval for query: %s\n", last_table.fullname, a_chunk.chunk_id, *the_query, len(sql_vals_pk), sql_vals_pk)
+			log.Printf("ind lo: %s  ind up: %s", last_table.indices_lo_pk, last_table.indices_up_pk)
 		}
-		query_row_count := 0
 		// --------------------------------------------------------------------------
-		ChunkReaderDumpProcess(q_rows, &query_row_count, a_sql_row, tableInfos[last_tableid], last_tableid, cols_cnt, ptrs, insert_size, chan2generator)
+		ChunkReaderDumpProcess(id, q_rows, &last_table.a_sql_row, &tableInfos[last_table.table_id], last_table.table_id, a_chunk.chunk_id, &last_table.ptrs, insert_size, chan2generator)
 		// --------------------------------------------------------------------------
 		if mode_debug {
-			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\nrows cnt: %d\n", sql_full_tab_name, *the_query, len(sql_vals_pk), sql_vals_pk, query_row_count)
+			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\n", last_table.fullname, *the_query, len(sql_vals_pk), sql_vals_pk)
 		}
 		// --------------------------------------------------------------------------
-		a_chunk = <-chunk2read
 	}
 	// ----------------------------------------------------------------------------------
-	if prepare_reader_interval_query != nil {
-		_ = prepare_reader_interval_query.Close()
-	}
-	if prepare_reader_equality_query != nil {
-		_ = prepare_reader_equality_query.Close()
+	for _, value := range tabReadingVars {
+		if value != nil {
+			value.interval_prepared_stmt.Close()
+			value.interval_prepared_stmt.Close()
+		}
 	}
 	// ----------------------------------------------------------------------------------
 	if mode_debug {
-		log.Printf("tableChunkReader[%d] finish\n", id)
+		log.Printf("tableChunkReader[%02d] finish cntreadchunk:%9d last_hit: %9d cache_hit: %9d cache_miss:%9d\n", id, cntreadchunk, last_hit, cache_hit, cache_miss)
+		log.Printf("tableChunkReader[%02d] finish\n", id)
 	}
 }
 
@@ -1230,6 +1294,9 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 		// ------------------------------------------------------------------
 		a_dta_chunk := <-rowvalueschan
 		for {
+			if mode_debug {
+				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d usedlen %5d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, a_dta_chunk.usedlen)
+			}
 			if a_dta_chunk.table_id == -1 {
 				break
 			}
@@ -1251,16 +1318,15 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			}
 			arr_ind := -1
 			for j := 0; j < a_dta_chunk.usedlen; j++ {
-				a_basic_row := a_dta_chunk.rows[j]
 				arr_ind += 2
 				// -------------------------------------------------
-				for n, value := range a_basic_row {
-					if value == nil {
+				for n, value := range a_dta_chunk.rows[j].cols {
+					if value.kind == -1 {
 						tab_row[n] = "NULL"
 					} else {
 						if col_meta[n].mustBeQuote {
-							if strings.ContainsAny(*value, "\\\u0000\u001a\n\r\"'") {
-								v := strings.ReplaceAll(*value, "\\", "\\\\")
+							if strings.ContainsAny(*value.val, "\\\u0000\u001a\n\r\"'") {
+								v := strings.ReplaceAll(*value.val, "\\", "\\\\")
 								v = strings.ReplaceAll(v, "\u0000", "\\0")
 								v = strings.ReplaceAll(v, "\u001a", "\\Z")
 								v = strings.ReplaceAll(v, "\n", "\\n")
@@ -1269,7 +1335,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 								v = strings.ReplaceAll(v, "\"", "\\\"")
 								tab_row[n] = "'" + v + "'"
 							} else {
-								tab_row[n] = "'" + *value + "'"
+								tab_row[n] = "'" + *value.val + "'"
 							}
 						} else {
 							if col_meta[n].isKindFloat {
@@ -1278,10 +1344,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 									f_prec = 53
 								}
 								f := new(big.Float).SetPrec(f_prec)
-								f.SetString(*value)
+								f.SetString(*value.val)
 								tab_row[n] = f.Text('f', -1)
 							} else {
-								tab_row[n] = *value
+								tab_row[n] = *value.val
 							}
 						}
 					}
@@ -1297,7 +1363,13 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			} else {
 				a_str = strings.Join(insert_sql_arr[0:arr_ind+2], "")
 			}
-			sql2inject <- insertchunk{table_id: last_table_id, sql: &a_str}
+			if mode_debug {
+				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... sql len is %6d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, len(a_str))
+			}
+			sql2inject <- insertchunk{table_id: last_table_id, chunk_id: a_dta_chunk.chunk_id, sql: &a_str}
+			if mode_debug {
+				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... ok sql2inject", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id)
+			}
 			// ----------------------------------------------------------
 			a_dta_chunk = <-rowvalueschan
 		}
@@ -1323,20 +1395,19 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			}
 			// ----------------------------------------------------------
 			for j := 0; j < a_dta_chunk.usedlen; j++ {
-				a_basic_row := a_dta_chunk.rows[j]
 				// -------------------------------------------------
-				for n, value := range a_basic_row {
-					if value == nil {
+				for n, value := range a_dta_chunk.rows[j].cols {
+					if value.kind == -1 {
 						if col_meta[n].isKindChar {
 							tab_row[n] = "\\N"
 						} else {
 							tab_row[n] = ""
 						}
 					} else {
-						if col_meta[n].mustBeQuote && strings.ContainsAny(*value, "\n,\"") {
-							tab_row[n] = "'" + strings.ReplaceAll(*value, "\"", "\"\"") + "'"
+						if col_meta[n].mustBeQuote && strings.ContainsAny(*value.val, "\n,\"") {
+							tab_row[n] = "'" + strings.ReplaceAll(*value.val, "\"", "\"\"") + "'"
 						} else if col_meta[n].haveFract {
-							timeSec, timeFract, dotFound := strings.Cut(*value, ".")
+							timeSec, timeFract, dotFound := strings.Cut(*value.val, ".")
 							if dotFound {
 								timeFract = strings.TrimRight(timeFract, "0")
 								if len(timeFract) == 1 {
@@ -1344,10 +1415,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 								}
 								tab_row[n] = timeSec + "." + timeFract
 							} else {
-								tab_row[n] = *value
+								tab_row[n] = *value.val
 							}
 						} else {
-							tab_row[n] = *value
+							tab_row[n] = *value.val
 						}
 					}
 				}
@@ -1402,6 +1473,9 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 		var zst_enc *zstd.Encoder
 		// --------------------------------------------------------------------------
 		for a_insert_sql.sql != nil {
+			if mode_debug {
+				log.Printf("[%02d] tableFileWriter table %03d chunk %12d sql len %6d", id, a_insert_sql.table_id, a_insert_sql.chunk_id, len(*a_insert_sql.sql))
+			}
 			// ------------------------------------------------------------------
 			if last_tableid != a_insert_sql.table_id {
 				last_tableid = a_insert_sql.table_id
@@ -1453,6 +1527,9 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 	} else {
 		// --------------------------------------------------------------------------
 		for a_insert_sql.sql != nil {
+			if mode_debug {
+				log.Printf("[%02d] tableFileWriter table %03d chunk %12d sql len %6d", id, a_insert_sql.table_id, a_insert_sql.chunk_id, len(*a_insert_sql.sql))
+			}
 			// ------------------------------------------------------------------
 			if last_tableid != a_insert_sql.table_id {
 				last_tableid = a_insert_sql.table_id
@@ -1487,6 +1564,9 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 			// ------------------------------------------------------------------
 			io.WriteString(und_fh, *a_insert_sql.sql)
 			// ------------------------------------------------------------------
+			if mode_debug {
+				log.Printf("[%02d] tableFileWriter table %03d chunk %12d wait next", id, a_insert_sql.table_id, a_insert_sql.chunk_id)
+			}
 			a_insert_sql = <-sql2inject
 		}
 		// --------------------------------------------------------------------------
@@ -1553,6 +1633,7 @@ func main() {
 	arg_db_host := flag.String("host", "127.0.0.1", "the database host")
 	arg_db_user := flag.String("user", "mysql", "the database connection user")
 	arg_db_pasw := flag.String("pwd", "", "the database connection password")
+	arg_browser_parr := flag.Int("browser", 4, "number of browsers")
 	arg_db_parr := flag.Int("parallel", 10, "number of workers")
 	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
 	arg_insert_size := flag.Int("insertsize", 500, "rows count for each insert")
@@ -1646,11 +1727,14 @@ func main() {
 	zstd_level := *arg_dumpcompress_level
 	zstd_concur := *arg_dumpcompress_concur
 	// ----------------------------------------------------------------------------------
+	var cntReader int = *arg_db_parr
+	var cntBrowser int = *arg_browser_parr
+	// ----------------------------------------------------------------------------------
 	var conSrc []sql.Conn
 	var conDst []sql.Conn
 	var dbSrc *sql.DB
 	var dbDst *sql.DB
-	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, *arg_db_parr+1, arg_dbs[0])
+	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_dbs[0])
 	if *arg_dumpmode == "cpy" {
 		dbDst, conDst, _ = GetDstConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_dbs[0])
 	}
@@ -1671,30 +1755,44 @@ func main() {
 		log.Printf("tables infos  => %s", r)
 	}
 	// ----------------------------------------------------------------------------------
-	var wg sync.WaitGroup
+	var wg_brw sync.WaitGroup
+	var wg_red sync.WaitGroup
 	var wg_gen sync.WaitGroup
 	var wg_wrt sync.WaitGroup
+	tables_to_browse := make(chan int, len(tables2dump)**arg_loop+cntBrowser)
 	pk_chunks_to_read := make(chan tablechunk, *arg_db_parr*200)
-	sql_to_write := make(chan insertchunk, 20000)
-	sql_generator := make(chan datachunk, 20000)
+	sql_to_write := make(chan insertchunk, *arg_db_parr*400)
+	sql_generator := make(chan datachunk, *arg_db_parr*1000)
 	if mode_debug {
 		pk_chunks_to_read = make(chan tablechunk, 5)
 		sql_to_write = make(chan insertchunk, 5)
+		sql_generator = make(chan datachunk, 5)
 	}
 	// ------------
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		tableChunkBrowser(conSrc[0], r, pk_chunks_to_read, int64(*arg_chunk_size), len(conSrc)-1, *arg_loop)
-	}()
+	for l := 0; l < *arg_loop; l++ {
+		for t := 0; t < len(tables2dump); t++ {
+			tables_to_browse <- t
+		}
+	}
+	for b := 0; b < cntBrowser; b++ {
+		tables_to_browse <- -1
+	}
 	// ------------
-	for j := 1; j < len(conSrc); j++ {
-		wg.Add(1)
+	for j := 0; j < cntBrowser; j++ {
+		wg_brw.Add(1)
 		go func(adbConn sql.Conn, id int) {
-			defer wg.Done()
-			tableChunkReader(pk_chunks_to_read, sql_generator, adbConn, r, id, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, *arg_insert_size, zstd_level, zstd_concur)
+			defer wg_brw.Done()
+			tableChunkBrowser(adbConn, id, tables_to_browse, r, pk_chunks_to_read, int64(*arg_chunk_size))
 		}(conSrc[j], j)
-		time.Sleep(5 * time.Millisecond)
+	}
+	// ------------
+	for j := cntBrowser; j < cntReader+cntBrowser-1; j++ {
+		time.Sleep(10 * time.Millisecond)
+		wg_red.Add(1)
+		go func(adbConn sql.Conn, id int) {
+			defer wg_red.Done()
+			tableChunkReader(pk_chunks_to_read, sql_generator, adbConn, r, id, *arg_insert_size, cntBrowser)
+		}(conSrc[j], j)
 	}
 	// ------------
 	writer_cnt := 0
@@ -1706,7 +1804,6 @@ func main() {
 				defer wg_wrt.Done()
 				tableCopyWriter(sql_to_write, adbConn, id+len(conSrc))
 			}(conDst[j], j)
-			time.Sleep(5 * time.Millisecond)
 		}
 	} else {
 		writer_cnt = *arg_dumpparr
@@ -1716,22 +1813,39 @@ func main() {
 				defer wg_wrt.Done()
 				tableFileWriter(sql_to_write, id, r, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, zstd_level, zstd_concur)
 			}(j)
-			time.Sleep(5 * time.Millisecond)
 		}
 	}
 	// ------------
 	gener_cnt := *arg_db_parr * 2
+	if mode_debug {
+		gener_cnt = 2
+	}
 	for j := 0; j < gener_cnt; j++ {
 		wg_gen.Add(1)
 		go func(id int) {
 			defer wg_gen.Done()
 			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, *arg_dumpinsert, sql_to_write, *arg_insert_size)
 		}(j)
-		time.Sleep(5 * time.Millisecond)
 	}
 	// ------------
-	wg.Wait()
-	log.Print("we are done with browser & reader")
+	wg_brw.Wait()
+	log.Print("we are done with browser")
+	// ------------
+	for j := 0; j < cntReader; j++ {
+		var a_chunk tablechunk
+		a_chunk.table_id = -1
+		a_chunk.chunk_id = -1
+		a_chunk.begin_val = make([]string, 0)
+		a_chunk.end_val = make([]string, 0)
+		a_chunk.begin_equal_end = false
+		a_chunk.is_done = true
+		pk_chunks_to_read <- a_chunk
+	}
+	if mode_debug {
+		log.Printf("we added %d empty chunk to flush readers", cntReader)
+	}
+	wg_red.Wait()
+	log.Print("we are done with reader")
 	// ------------
 	for j := 0; j < gener_cnt; j++ {
 		sql_generator <- datachunk{table_id: -1, rows: nil}

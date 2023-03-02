@@ -74,9 +74,9 @@ do
     echo "timing mysqlpump $port on ${DB_HOST}"
     time bash -c "${DCK_MYSQL}pump  -u root -ptest1234  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks   --no-create-info --no-create-db       --default-parallelism=10    --databases foobar --result-file=/dev/null"
     echo "timing paradump sql $port on ${DB_HOST}"
-    time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode sql -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m" 
+    time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode sql -dumpfile /dev/null"
     echo "timing paradump csv $port on ${DB_HOST}"
-    time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode csv -dumpfile ${TMPDIR}/dump_%d_%t_%p.%m"
+    time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables --dumpmode csv -dumpfile /dev/null"
 done
 
 if [ -d "$TMPDIR" ]
