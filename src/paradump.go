@@ -409,9 +409,11 @@ type MetadataTable struct {
 	onError                        int
 	fullName                       string
 	listColsSQL                    string
-	listColsCSV                    string
-	listColsPkDescSQL              string
 	listColsPkSQL                  string
+	listColsPkFetchSQL             string
+	listColsPkOrderSQL             string
+	listColsPkOrderDescSQL         string
+	listColsCSV                    string
 	query_for_browser_first        string
 	query_for_browser_next         string
 	param_indices_browser_next_qry []int
@@ -606,35 +608,49 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	}
 	// ---------------------------------------------------------------------------------
 	result.fullName = fmt.Sprintf("`%s`.`%s`", result.dbName, result.tbName)
-
-	sql_cond_lower_pk, qry_indices_lo_bound := generatePredicat(result.primaryKey, true)
-	sql_cond_upper_pk, qry_indices_up_bound := generatePredicat(result.primaryKey, false)
-	sql_cond_equal_pk, qry_indices_equality := generateEqualityPredicat(result.primaryKey)
-
-	result.listColsSQL = generateListCols4Sql(result.columnInfos)
-	result.listColsPkSQL = generateListPkCols4Sql(result.primaryKey, "")
-	result.listColsPkDescSQL = generateListPkCols4Sql(result.primaryKey, "desc")
-	result.listColsCSV = generateListCols4Csv(result.columnInfos)
-	// ---------------------------------------------------------------------------------
-	result.query_for_browser_first = fmt.Sprintf("select %s from %s order by %s limit 1 ", result.listColsPkSQL, result.fullName, result.listColsPkSQL)
-	if result.fakePrimaryKey {
-		result.query_for_browser_next = fmt.Sprintf("select %s,cast(@cnt as unsigned ) as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %%d ) e order by %s limit 1 ",
-			result.listColsPkSQL, result.listColsPkSQL, result.fullName, sql_cond_lower_pk, result.listColsPkSQL, result.listColsPkDescSQL)
-	} else {
-		result.query_for_browser_next = fmt.Sprintf("select %s                                      from ( select %s              from %s                          where %s order by %s limit %%d ) e order by %s limit 1 ",
-			result.listColsPkSQL, result.listColsPkSQL, result.fullName, sql_cond_lower_pk, result.listColsPkSQL, result.listColsPkDescSQL)
-	}
-	result.param_indices_browser_next_qry = qry_indices_lo_bound
-	// ---------------------------------------------------------------------------------
-	result.query_for_reader_equality = fmt.Sprintf("/* paradump */ select %s from %s where ( %s )           ", result.listColsSQL, result.fullName, sql_cond_equal_pk)
-	result.param_indices_equality_qry = qry_indices_equality
-	result.query_for_reader_interval = fmt.Sprintf("/* paradump */ select %s from %s where ( %s ) and ( %s) ", result.listColsSQL, result.fullName, sql_cond_lower_pk, sql_cond_upper_pk)
-	result.param_indices_interval_lo_qry = qry_indices_lo_bound
-	result.param_indices_interval_up_qry = qry_indices_up_bound
-	// ---------------------------------------------------------------------------------
 	result.cntCols = len(result.columnInfos)
 	result.cntPkCols = len(result.primaryKey)
 	// ---------------------------------------------------------------------------------
+	enumPkCols := make([]string, 0)
+	for _, v := range result.columnInfos {
+		if v.colType == "enum" {
+			for _, pk := range result.primaryKey {
+				if pk == v.colName {
+					enumPkCols = append(enumPkCols, pk)
+				}
+			}
+		}
+	}
+	log.Printf(" for table %s we have enum in pk for column %s", result.fullName, enumPkCols)
+	// ---------------------------
+	sql_cond_lower_pk, qry_indices_lo_bound := generatePredicat(result.primaryKey, true, enumPkCols)
+	sql_cond_upper_pk, qry_indices_up_bound := generatePredicat(result.primaryKey, false, enumPkCols)
+	sql_cond_equal_pk, qry_indices_equality := generateEqualityPredicat(result.primaryKey, enumPkCols)
+	// ---------------------------
+	result.listColsSQL = generateListCols4Sql(result.columnInfos)
+	result.listColsPkSQL = generateListPkCols4Sql(result.primaryKey, "")
+	result.listColsPkFetchSQL = generateListPkColsFetch4Sql(result.primaryKey, enumPkCols)
+	result.listColsPkOrderSQL = generateListPkCols4Sql(result.primaryKey, "")
+	result.listColsPkOrderDescSQL = generateListPkCols4Sql(result.primaryKey, "desc")
+	result.listColsCSV = generateListCols4Csv(result.columnInfos)
+	// ---------------------------
+	result.query_for_browser_first = fmt.Sprintf("select %s from %s order by %s limit 1 ", result.listColsPkFetchSQL, result.fullName, result.listColsPkOrderSQL)
+	if result.fakePrimaryKey {
+		result.query_for_browser_next = fmt.Sprintf("select %s,cast(@cnt as unsigned integer ) as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %%d ) e order by %s limit 1 ",
+			result.listColsPkSQL, result.listColsPkFetchSQL, result.fullName, sql_cond_lower_pk, result.listColsPkOrderSQL, result.listColsPkOrderDescSQL)
+	} else {
+		result.query_for_browser_next = fmt.Sprintf("select %s                                      from ( select %s              from %s                          where %s order by %s limit %%d ) e order by %s limit 1 ",
+			result.listColsPkSQL, result.listColsPkFetchSQL, result.fullName, sql_cond_lower_pk, result.listColsPkOrderSQL, result.listColsPkOrderDescSQL)
+	}
+	result.param_indices_browser_next_qry = qry_indices_lo_bound
+	// ---------------------------
+	result.query_for_reader_equality = fmt.Sprintf("/* paradump */ select %s from %s where ( %s )           ", result.listColsSQL, result.fullName, sql_cond_equal_pk)
+	result.param_indices_equality_qry = qry_indices_equality
+	// ---------------------------
+	result.query_for_reader_interval = fmt.Sprintf("/* paradump */ select %s from %s where ( %s ) and ( %s) ", result.listColsSQL, result.fullName, sql_cond_lower_pk, sql_cond_upper_pk)
+	result.param_indices_interval_lo_qry = qry_indices_lo_bound
+	result.param_indices_interval_up_qry = qry_indices_up_bound
+	// ---------------------------
 	if dumpmode == "cpy" {
 		result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
 	} else {
@@ -643,6 +659,11 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		} else {
 			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s` VALUES (", result.tbName)
 		}
+	}
+	// ---------------------------
+	if len(enumPkCols) > 0 {
+		log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_first)
+		log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_next)
 	}
 	// ---------------------------------------------------------------------------------
 	return result, true
@@ -795,7 +816,7 @@ func generateValuesForPredicat(indices []int, boundValues []string) []any {
 // ------------------------------------------------------------------------------------------
 // lower bound is inclusive
 // upper bound is exclusive
-func generatePredicat(pkeyCols []string, lowerbound bool) (string, []int) {
+func generatePredicat(pkeyCols []string, lowerbound bool, enumCols []string) (string, []int) {
 	var sql_pred string
 	sql_vals_indices := make([]int, 0)
 	ncolpkey := len(pkeyCols) - 1
@@ -807,16 +828,39 @@ func generatePredicat(pkeyCols []string, lowerbound bool) (string, []int) {
 	}
 	sql_pred = " ( "
 	for i := range pkeyCols {
+		col_is_enum := false
+		for e := range enumCols {
+			if enumCols[e] == pkeyCols[i] {
+				col_is_enum = true
+				break
+			}
+		}
+		place_holder := "?"
+		if col_is_enum {
+			place_holder = "cast(? as unsigned integer)"
+		}
 		if ncolpkey == i {
-			sql_pred = sql_pred + fmt.Sprintf(" ( `%s` %s ? ) ", pkeyCols[i], op_1)
+			sql_pred = sql_pred + fmt.Sprintf(" ( `%s` %s %s ) ", pkeyCols[i], op_1, place_holder)
 		} else {
-			sql_pred = sql_pred + fmt.Sprintf(" ( `%s` %s ? ) ", pkeyCols[i], op_o)
+			sql_pred = sql_pred + fmt.Sprintf(" ( `%s` %s %s ) ", pkeyCols[i], op_o, place_holder)
 		}
 		sql_vals_indices = append(sql_vals_indices, i)
 		if ncolpkey > 0 {
 			for j := 0; j < ncolpkey; j++ {
 				if j < i {
-					sql_pred = sql_pred + fmt.Sprintf(" and ( `%s` = ? ) ", pkeyCols[j])
+					col_is_enum := false
+					for e := range enumCols {
+						if enumCols[e] == pkeyCols[j] {
+							col_is_enum = true
+							break
+						}
+					}
+					place_holder := "?"
+					if col_is_enum {
+						place_holder = "cast(? as unsigned integer)"
+					}
+
+					sql_pred = sql_pred + fmt.Sprintf(" and ( `%s` = %s ) ", pkeyCols[j], place_holder)
 					sql_vals_indices = append(sql_vals_indices, j)
 				}
 			}
@@ -830,7 +874,7 @@ func generatePredicat(pkeyCols []string, lowerbound bool) (string, []int) {
 }
 
 // ------------------------------------------------------------------------------------------
-func generateEqualityPredicat(pkeyCols []string) (string, []int) {
+func generateEqualityPredicat(pkeyCols []string, enumCols []string) (string, []int) {
 	var sql_pred string
 	sql_vals_indices := make([]int, 0)
 	sql_pred = " ( "
@@ -838,7 +882,18 @@ func generateEqualityPredicat(pkeyCols []string) (string, []int) {
 		if i != 0 {
 			sql_pred = sql_pred + " and "
 		}
-		sql_pred = sql_pred + fmt.Sprintf(" ( `%s` = ? ) ", pkeyCols[i])
+		col_is_enum := false
+		for e := range enumCols {
+			if enumCols[e] == pkeyCols[i] {
+				col_is_enum = true
+				break
+			}
+		}
+		place_holder := "?"
+		if col_is_enum {
+			place_holder = " cast( ? as unsigned integer ) "
+		}
+		sql_pred = sql_pred + fmt.Sprintf(" ( `%s` = %s ) ", pkeyCols[i], place_holder)
 		sql_vals_indices = append(sql_vals_indices, i)
 	}
 	sql_pred = sql_pred + " ) "
@@ -913,7 +968,6 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 		var the_finish_query string
 		var prepare_finish_query *sql.Stmt
 		var p_err error
-		var sql_vals_pk []any
 		var end_pk_row []string
 		var chunk_id int64 = 100000000 * (int64(j) + 1)
 		// --------------------------------------------------------------------------
@@ -960,9 +1014,9 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 					end_pk_row[n] = value.String
 				}
 				if mode_debug {
-					log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
-					log.Printf("table %s pk interval : %s -> %s\n", tableInfos[j].fullName, start_pk_row, end_pk_row)
-					log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
+					log.Printf("tableChunkBrowser: table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
+					log.Printf("tableChunkBrowser: table %s pk interval : %s -> %s\n", tableInfos[j].fullName, start_pk_row, end_pk_row)
+					log.Printf("tableChunkBrowser: %s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 				}
 				begin_equal_end = reflect.DeepEqual(start_pk_row, end_pk_row)
 				if tableInfos[j].fakePrimaryKey && begin_equal_end && pk_cnt >= sizeofchunk {
@@ -972,11 +1026,6 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 					break
 				}
 				// ----------------------------------------------------------
-			}
-			if mode_debug {
-				log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
-				log.Printf("table %s pk interval : %s -> %s\n", tableInfos[j].fullName, start_pk_row, end_pk_row)
-				log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 			}
 			// ------------------------------------------------------------------
 			chunk_id++
@@ -1219,6 +1268,32 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 		log.Printf("tableChunkReader[%02d] finish cntreadchunk:%9d last_hit: %9d cache_hit: %9d cache_miss:%9d\n", id, cntreadchunk, last_hit, cache_hit, cache_miss)
 		log.Printf("tableChunkReader[%02d] finish\n", id)
 	}
+}
+
+// ------------------------------------------------------------------------------------------
+func generateListPkColsFetch4Sql(col_pk []string, enumCols []string) string {
+	if len(col_pk) == 0 {
+		return ""
+	}
+	a_str := ""
+	for ctab := 0; ctab < len(col_pk); ctab++ {
+		col_is_enum := false
+		for e := range enumCols {
+			if enumCols[e] == col_pk[ctab] {
+				col_is_enum = true
+				break
+			}
+		}
+		if ctab > 0 {
+			a_str = a_str + ","
+		}
+		if col_is_enum {
+			a_str = a_str + " cast(`" + col_pk[ctab] + "` as unsigned integer ) as `" + col_pk[ctab] + "`"
+		} else {
+			a_str = a_str + " `" + col_pk[ctab] + "` "
+		}
+	}
+	return a_str
 }
 
 // ------------------------------------------------------------------------------------------
