@@ -396,26 +396,31 @@ type aTable struct {
 }
 
 type MetadataTable struct {
-	dbName                        string
-	tbName                        string
-	cntRows                       int64
-	storageEng                    string
-	cntCols                       int
-	cntPkCols                     int
-	columnInfos                   []columnInfo
-	primaryKey                    []string
-	Indexes                       []indexInfo
-	fakePrimaryKey                bool
-	onError                       int
-	fullName                      string
-	listColsSQL                   string
-	listColsCSV                   string
-	query_for_reader_interval     string
-	param_indices_interval_lo_qry []int
-	param_indices_interval_up_qry []int
-	query_for_reader_equality     string
-	param_indices_equality_qry    []int
-	query_for_insert              string
+	dbName                         string
+	tbName                         string
+	cntRows                        int64
+	storageEng                     string
+	cntCols                        int
+	cntPkCols                      int
+	columnInfos                    []columnInfo
+	primaryKey                     []string
+	Indexes                        []indexInfo
+	fakePrimaryKey                 bool
+	onError                        int
+	fullName                       string
+	listColsSQL                    string
+	listColsCSV                    string
+	listColsPkDescSQL              string
+	listColsPkSQL                  string
+	query_for_browser_first        string
+	query_for_browser_next         string
+	param_indices_browser_next_qry []int
+	query_for_reader_interval      string
+	param_indices_interval_lo_qry  []int
+	param_indices_interval_up_qry  []int
+	query_for_reader_equality      string
+	param_indices_equality_qry     []int
+	query_for_insert               string
 }
 
 // ------------------------------------------------------------------------------------------
@@ -470,7 +475,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			log.Fatal(err.Error())
 		}
 		a_col.isNullable = (a_str == "YES")
-		a_col.isKindChar = (a_col.colType == "char" || a_col.colType == "longtext" || a_col.colType == "mediumtext" || a_col.colType == "text" || a_col.colType == "tinytext" || a_col.colType == "varchar")
+		a_col.isKindChar = (a_col.colType == "char" || a_col.colType == "longtext" || a_col.colType == "mediumtext" || a_col.colType == "text" || a_col.colType == "tinytext" || a_col.colType == "varchar" || a_col.colType == "enum")
 		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" || a_col.colType == "bit")
 		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
 		a_col.isKindFloat = (a_col.colType == "float" || a_col.colType == "double")
@@ -607,14 +612,26 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	sql_cond_equal_pk, qry_indices_equality := generateEqualityPredicat(result.primaryKey)
 
 	result.listColsSQL = generateListCols4Sql(result.columnInfos)
+	result.listColsPkSQL = generateListPkCols4Sql(result.primaryKey, "")
+	result.listColsPkDescSQL = generateListPkCols4Sql(result.primaryKey, "desc")
 	result.listColsCSV = generateListCols4Csv(result.columnInfos)
-
+	// ---------------------------------------------------------------------------------
+	result.query_for_browser_first = fmt.Sprintf("select %s from %s order by %s limit 1 ", result.listColsPkSQL, result.fullName, result.listColsPkSQL)
+	if result.fakePrimaryKey {
+		result.query_for_browser_next = fmt.Sprintf("select %s,cast(@cnt as unsigned ) as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %%d ) e order by %s limit 1 ",
+			result.listColsPkSQL, result.listColsPkSQL, result.fullName, sql_cond_lower_pk, result.listColsPkSQL, result.listColsPkDescSQL)
+	} else {
+		result.query_for_browser_next = fmt.Sprintf("select %s                                      from ( select %s              from %s                          where %s order by %s limit %%d ) e order by %s limit 1 ",
+			result.listColsPkSQL, result.listColsPkSQL, result.fullName, sql_cond_lower_pk, result.listColsPkSQL, result.listColsPkDescSQL)
+	}
+	result.param_indices_browser_next_qry = qry_indices_lo_bound
+	// ---------------------------------------------------------------------------------
 	result.query_for_reader_equality = fmt.Sprintf("/* paradump */ select %s from %s where ( %s )           ", result.listColsSQL, result.fullName, sql_cond_equal_pk)
 	result.param_indices_equality_qry = qry_indices_equality
 	result.query_for_reader_interval = fmt.Sprintf("/* paradump */ select %s from %s where ( %s ) and ( %s) ", result.listColsSQL, result.fullName, sql_cond_lower_pk, sql_cond_upper_pk)
 	result.param_indices_interval_lo_qry = qry_indices_lo_bound
 	result.param_indices_interval_up_qry = qry_indices_up_bound
-
+	// ---------------------------------------------------------------------------------
 	result.cntCols = len(result.columnInfos)
 	result.cntPkCols = len(result.primaryKey)
 	// ---------------------------------------------------------------------------------
@@ -848,37 +865,29 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 			break
 		}
 		sizeofchunk = sizeofchunk_init
-		sql_lst_pk_cols := fmt.Sprintf("`%s`", tableInfos[j].primaryKey[0])
-		c := 1
-		for c < len(tableInfos[j].primaryKey) {
-			sql_lst_pk_cols = sql_lst_pk_cols + "," + fmt.Sprintf("`%s`", tableInfos[j].primaryKey[c])
-			c++
-		}
-		sql_full_tab_name := fmt.Sprintf("`%s`.`%s`", tableInfos[j].dbName, tableInfos[j].tbName)
-		the_query := fmt.Sprintf("select %s from %s order by %s limit 1 ", sql_lst_pk_cols, sql_full_tab_name, sql_lst_pk_cols)
 		if mode_debug {
-			log.Printf("table %s size pk %d query :  %s \n", sql_full_tab_name, c, the_query)
+			log.Printf("table %s size pk %d query :  %s \n", tableInfos[j].fullName, tableInfos[j].cntPkCols, tableInfos[j].query_for_browser_first)
 		}
 		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-		q_rows, q_err := adbConn.QueryContext(ctx, the_query)
+		q_rows, q_err := adbConn.QueryContext(ctx, tableInfos[j].query_for_browser_first)
 		if q_err != nil {
-			log.Fatalf("can not query table %s to get first pk aka ( %s )\n%s", sql_full_tab_name, sql_lst_pk_cols, q_err.Error())
+			log.Fatalf("can not query table %s to get first pk aka ( %s )\n%s", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, q_err.Error())
 		}
-		a_sql_row := make([]*sql.NullString, c)
+		a_sql_row := make([]*sql.NullString, tableInfos[j].cntPkCols)
 		var pk_cnt int64
-		ptrs := make([]any, c)
+		ptrs := make([]any, tableInfos[j].cntPkCols)
 		var ptrs_nextpk []any
 		if tableInfos[j].fakePrimaryKey {
-			ptrs_nextpk = make([]any, c+1)
+			ptrs_nextpk = make([]any, tableInfos[j].cntPkCols+1)
 		} else {
-			ptrs_nextpk = make([]any, c)
+			ptrs_nextpk = make([]any, tableInfos[j].cntPkCols)
 		}
 		for i := range a_sql_row {
 			ptrs[i] = &a_sql_row[i]
 			ptrs_nextpk[i] = &a_sql_row[i]
 		}
 		if tableInfos[j].fakePrimaryKey {
-			ptrs_nextpk[c] = &pk_cnt
+			ptrs_nextpk[tableInfos[j].cntPkCols] = &pk_cnt
 		} else {
 			pk_cnt = -1
 		}
@@ -886,63 +895,49 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 		for q_rows.Next() {
 			err := q_rows.Scan(ptrs...)
 			if err != nil {
-				log.Printf("can not scan result for table %s \n", sql_full_tab_name)
+				log.Printf("can not scan result for table %s \n", tableInfos[j].fullName)
 				log.Fatal(err.Error())
 			}
 			row_cnt++
 		}
 		if row_cnt == 0 {
-			log.Printf("table["+format_cnt_table+"] %s is empty \n", j, sql_full_tab_name)
+			log.Printf("table["+format_cnt_table+"] %s is empty \n", j, tableInfos[j].fullName)
 			continue
 		}
-		start_pk_row := make([]string, c)
+		start_pk_row := make([]string, tableInfos[j].cntPkCols)
 		for n, value := range a_sql_row {
 			start_pk_row[n] = value.String
 		}
-		log.Printf("table["+format_cnt_table+"] %s first pk ( %s ) - start scan pk %s\n", j, sql_full_tab_name, sql_lst_pk_cols, start_pk_row)
+		log.Printf("table["+format_cnt_table+"] %s first pk ( %s ) - start scan pk %s\n", j, tableInfos[j].fullName, tableInfos[j].listColsPkSQL, start_pk_row)
 		// --------------------------------------------------------------------------
-		sql_cond_pk, sql_val_indices_pk := generatePredicat(tableInfos[j].primaryKey, true)
-		var sql_order_pk_cols string
-		for i, v := range tableInfos[j].primaryKey {
-			if i != 0 {
-				sql_order_pk_cols = sql_order_pk_cols + ","
-			}
-			sql_order_pk_cols = sql_order_pk_cols + fmt.Sprintf("`%s` desc ", v)
-		}
 		var the_finish_query string
 		var prepare_finish_query *sql.Stmt
 		var p_err error
 		var sql_vals_pk []any
 		var end_pk_row []string
 		for {
-			if tableInfos[j].fakePrimaryKey {
-				the_finish_query = fmt.Sprintf("select %s,cast(@cnt as unsigned ) as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
-					sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
-			} else {
-				the_finish_query = fmt.Sprintf("select %s                                      from ( select %s              from %s                          where %s order by %s limit %d ) e order by %s limit 1 ",
-					sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
-			}
+			the_finish_query = fmt.Sprintf(tableInfos[j].query_for_browser_next, sizeofchunk)
 			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 			prepare_finish_query, p_err = adbConn.PrepareContext(ctx, the_finish_query)
 			if p_err != nil {
 				log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query, p_err.Error())
 			}
-			sql_vals_pk = generateValuesForPredicat(sql_val_indices_pk, start_pk_row)
+			sql_vals_pk = generateValuesForPredicat(tableInfos[j].param_indices_browser_next_qry, start_pk_row)
 			if mode_debug {
-				log.Printf("table %s query :  %s with %d params sizeofchunk %d\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk), sizeofchunk)
+				log.Printf("table %s query :  %s with %d params sizeofchunk %d\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sizeofchunk)
 			}
 			q_rows, q_err = prepare_finish_query.Query(sql_vals_pk...)
 			if q_err != nil {
-				log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", sql_full_tab_name, sql_lst_pk_cols, q_err.Error())
+				log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, q_err.Error())
 			}
 			for q_rows.Next() {
 				err := q_rows.Scan(ptrs_nextpk...)
 				if err != nil {
-					log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) \n", sql_full_tab_name, len(ptrs_nextpk))
+					log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) \n", tableInfos[j].fullName, len(ptrs_nextpk))
 					log.Fatal(err.Error())
 				}
 			}
-			end_pk_row = make([]string, c)
+			end_pk_row = make([]string, tableInfos[j].cntPkCols)
 			for n, value := range a_sql_row {
 				end_pk_row[n] = value.String
 			}
@@ -955,7 +950,7 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 			}
 		}
 		if mode_debug {
-			log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row, sizeofchunk)
+			log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, pk_cnt, end_pk_row, sizeofchunk)
 		}
 		// ------------------------------------------------------------------
 		var chunk_id int64 = 100000000 * (int64(j) + 1)
@@ -984,8 +979,7 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 				start_pk_row = end_pk_row
 				// ----------------------------------------------------------
 				if must_prepare_query {
-					the_finish_query = fmt.Sprintf("select %s,cast(@cnt as unsigned ) as _cnt_pkey from ( select %s,@cnt:=@cnt+1 from %s , ( select @cnt := 0 ) c where %s order by %s limit %d ) e order by %s limit 1 ",
-						sql_lst_pk_cols, sql_lst_pk_cols, sql_full_tab_name, sql_cond_pk, sql_lst_pk_cols, sizeofchunk, sql_order_pk_cols)
+					the_finish_query = fmt.Sprintf(tableInfos[j].query_for_browser_next, sizeofchunk)
 					_ = prepare_finish_query.Close()
 					ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 					prepare_finish_query, p_err = adbConn.PrepareContext(ctx, the_finish_query)
@@ -995,26 +989,26 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 					must_prepare_query = false
 				}
 				// ----------------------------------------------------------
-				sql_vals_pk := generateValuesForPredicat(sql_val_indices_pk, start_pk_row)
+				sql_vals_pk := generateValuesForPredicat(tableInfos[j].param_indices_browser_next_qry, start_pk_row)
 				q_rows, q_err = prepare_finish_query.Query(sql_vals_pk...)
 				if q_err != nil {
-					log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", sql_full_tab_name, sql_lst_pk_cols, q_err.Error())
+					log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, q_err.Error())
 				}
 				for q_rows.Next() {
 					err := q_rows.Scan(ptrs_nextpk...)
 					if err != nil {
-						log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) ( len sql_vals_pk %d) \n", sql_full_tab_name, len(ptrs_nextpk), len(sql_vals_pk))
+						log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) ( len sql_vals_pk %d) \n", tableInfos[j].fullName, len(ptrs_nextpk), len(sql_vals_pk))
 						log.Printf("query for nextpk is %s", the_finish_query)
 						log.Fatal(err.Error())
 					}
 				}
-				end_pk_row = make([]string, c)
+				end_pk_row = make([]string, tableInfos[j].cntPkCols)
 				for n, value := range a_sql_row {
 					end_pk_row[n] = value.String
 				}
 				if mode_debug {
-					log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
-					log.Printf("table %s pk interval : %s -> %s\n", sql_full_tab_name, start_pk_row, end_pk_row)
+					log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
+					log.Printf("table %s pk interval : %s -> %s\n", tableInfos[j].fullName, start_pk_row, end_pk_row)
 					log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 				}
 				begin_equal_end = reflect.DeepEqual(start_pk_row, end_pk_row)
@@ -1027,13 +1021,13 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 				// ----------------------------------------------------------
 			}
 			if mode_debug {
-				log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", sql_full_tab_name, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
-				log.Printf("table %s pk interval : %s -> %s\n", sql_full_tab_name, start_pk_row, end_pk_row)
+				log.Printf("table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
+				log.Printf("table %s pk interval : %s -> %s\n", tableInfos[j].fullName, start_pk_row, end_pk_row)
 				log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 			}
 			// ------------------------------------------------------------------
 		}
-		log.Printf("table["+format_cnt_table+"] %s scan is done , pk col ( %s ) scan size pk %d last pk %s\n", j, sql_full_tab_name, sql_lst_pk_cols, pk_cnt, end_pk_row)
+		log.Printf("table["+format_cnt_table+"] %s scan is done , pk col ( %s ) scan size pk %d last pk %s\n", j, tableInfos[j].fullName, tableInfos[j].listColsPkSQL, pk_cnt, end_pk_row)
 		// --------------------------------------------------------------------------
 		chunk_id++
 		var a_chunk tablechunk
@@ -1272,12 +1266,22 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 }
 
 // ------------------------------------------------------------------------------------------
+func generateListPkCols4Sql(col_pk []string, dml_desc string) string {
+	if len(col_pk) == 0 {
+		return ""
+	}
+	a_str := "`" + col_pk[0] + "` " + dml_desc
+	for ctab := 1; ctab < len(col_pk); ctab++ {
+		a_str = a_str + ",`" + col_pk[ctab] + "` " + dml_desc
+	}
+	return a_str
+}
+
+// ------------------------------------------------------------------------------------------
 func generateListCols4Sql(col_inf []columnInfo) string {
 	a_str := "`" + col_inf[0].colName + "`"
-	ctab := 1
-	for ctab < len(col_inf) {
+	for ctab := 1; ctab < len(col_inf); ctab++ {
 		a_str = a_str + ",`" + col_inf[ctab].colName + "`"
-		ctab++
 	}
 	return a_str
 }
@@ -1285,10 +1289,8 @@ func generateListCols4Sql(col_inf []columnInfo) string {
 // ------------------------------------------------------------------------------------------
 func generateListCols4Csv(col_inf []columnInfo) string {
 	a_str := col_inf[0].colName
-	ctab := 1
-	for ctab < len(col_inf) {
+	for ctab := 1; ctab < len(col_inf); ctab++ {
 		a_str = a_str + "," + col_inf[ctab].colName
-		ctab++
 	}
 	return a_str
 }
@@ -1372,10 +1374,19 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 								v = strings.ReplaceAll(v, "\r", "\\r")
 								v = strings.ReplaceAll(v, "'", "\\'")
 								v = strings.ReplaceAll(v, "\"", "\\\"")
-								v = "'" + v + "'"
+								if tab_meta.columnInfos[n].isKindBinary {
+									v = "_binary '" + v + "'"
+								} else {
+									v = "'" + v + "'"
+								}
 								insert_sql_arr[arr_ind] = &v
 							} else {
-								v := "'" + *value.val + "'"
+								var v string
+								if tab_meta.columnInfos[n].isKindBinary {
+									v = "_binary '" + *value.val + "'"
+								} else {
+									v = "'" + *value.val + "'"
+								}
 								insert_sql_arr[arr_ind] = &v
 							}
 						} else {
