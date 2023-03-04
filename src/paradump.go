@@ -915,72 +915,25 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 		var p_err error
 		var sql_vals_pk []any
 		var end_pk_row []string
-		for {
-			the_finish_query = fmt.Sprintf(tableInfos[j].query_for_browser_next, sizeofchunk)
-			ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
-			prepare_finish_query, p_err = adbConn.PrepareContext(ctx, the_finish_query)
-			if p_err != nil {
-				log.Fatalf("can not prepare to get next pk ( %s )\n%s", the_finish_query, p_err.Error())
-			}
-			sql_vals_pk = generateValuesForPredicat(tableInfos[j].param_indices_browser_next_qry, start_pk_row)
-			if mode_debug {
-				log.Printf("table %s query :  %s with %d params sizeofchunk %d\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sizeofchunk)
-			}
-			q_rows, q_err = prepare_finish_query.Query(sql_vals_pk...)
-			if q_err != nil {
-				log.Fatalf("can not query table %s to get next pk aka ( %s )\n%s", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, q_err.Error())
-			}
-			for q_rows.Next() {
-				err := q_rows.Scan(ptrs_nextpk...)
-				if err != nil {
-					log.Printf("can not scan result for table %s doing get next pk ( len ptrs_nextpk %d ) \n", tableInfos[j].fullName, len(ptrs_nextpk))
-					log.Fatal(err.Error())
-				}
-			}
-			end_pk_row = make([]string, tableInfos[j].cntPkCols)
-			for n, value := range a_sql_row {
-				end_pk_row[n] = value.String
-			}
-			if !tableInfos[j].fakePrimaryKey || !reflect.DeepEqual(start_pk_row, end_pk_row) || pk_cnt < sizeofchunk {
-				break
-			} else {
-				log.Printf("we change sizeofchunk from %d to %d", sizeofchunk, sizeofchunk*15/10)
-				sizeofchunk = sizeofchunk * 15 / 10
-				_ = prepare_finish_query.Close()
-			}
-		}
-		if mode_debug {
-			log.Printf("table %s end pk ( %s ) scan pk %d : %s sizeofchunk: %d \n", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, pk_cnt, end_pk_row, sizeofchunk)
-		}
-		// ------------------------------------------------------------------
 		var chunk_id int64 = 100000000 * (int64(j) + 1)
-		if mode_debug {
-			log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
-		}
-		begin_equal_end := reflect.DeepEqual(start_pk_row, end_pk_row)
-		for !begin_equal_end {
-			chunk_id++
-			var a_chunk tablechunk
-			a_chunk.table_id = j
-			a_chunk.chunk_id = chunk_id
-			a_chunk.begin_val = start_pk_row
-			a_chunk.end_val = end_pk_row
-			a_chunk.begin_equal_end = begin_equal_end
-			a_chunk.is_done = false
-			chunk2read <- a_chunk
-			// ------------------------------------------------------------------
+		// --------------------------------------------------------------------------
+		end_pk_row = start_pk_row
+		sizeofchunk = math.MaxInt
+		// --------------------------------------------------------------------------
+		for {
+			start_pk_row = end_pk_row
+			begin_equal_end := false
 			if sizeofchunk > sizeofchunk_init {
 				must_prepare_query = true
 				sizeofchunk = sizeofchunk_init
 			}
-			// ------------------------------------------------------------------
 			for {
-				// ----------------------------------------------------------
-				start_pk_row = end_pk_row
 				// ----------------------------------------------------------
 				if must_prepare_query {
 					the_finish_query = fmt.Sprintf(tableInfos[j].query_for_browser_next, sizeofchunk)
-					_ = prepare_finish_query.Close()
+					if prepare_finish_query != nil {
+						_ = prepare_finish_query.Close()
+					}
 					ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 					prepare_finish_query, p_err = adbConn.PrepareContext(ctx, the_finish_query)
 					if p_err != nil {
@@ -1012,11 +965,11 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 					log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 				}
 				begin_equal_end = reflect.DeepEqual(start_pk_row, end_pk_row)
-				if !tableInfos[j].fakePrimaryKey || !begin_equal_end || pk_cnt < sizeofchunk {
-					break
-				} else {
+				if tableInfos[j].fakePrimaryKey && begin_equal_end && pk_cnt >= sizeofchunk {
 					sizeofchunk = sizeofchunk * 15 / 10
 					must_prepare_query = true
+				} else {
+					break
 				}
 				// ----------------------------------------------------------
 			}
@@ -1026,18 +979,21 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 				log.Printf("%s\n", reflect.DeepEqual(start_pk_row, end_pk_row))
 			}
 			// ------------------------------------------------------------------
+			chunk_id++
+			var a_chunk tablechunk
+			a_chunk.table_id = j
+			a_chunk.chunk_id = chunk_id
+			a_chunk.begin_val = start_pk_row
+			a_chunk.end_val = end_pk_row
+			a_chunk.begin_equal_end = begin_equal_end
+			a_chunk.is_done = false
+			chunk2read <- a_chunk
+			// ------------------------------------------------------------------
+			if begin_equal_end {
+				break
+			}
 		}
 		log.Printf("table["+format_cnt_table+"] %s scan is done , pk col ( %s ) scan size pk %d last pk %s\n", j, tableInfos[j].fullName, tableInfos[j].listColsPkSQL, pk_cnt, end_pk_row)
-		// --------------------------------------------------------------------------
-		chunk_id++
-		var a_chunk tablechunk
-		a_chunk.table_id = j
-		a_chunk.chunk_id = chunk_id
-		a_chunk.begin_val = start_pk_row
-		a_chunk.end_val = end_pk_row
-		a_chunk.begin_equal_end = begin_equal_end
-		a_chunk.is_done = false
-		chunk2read <- a_chunk
 		// --------------------------------------------------------------------------
 		if prepare_finish_query != nil {
 			_ = prepare_finish_query.Close()
