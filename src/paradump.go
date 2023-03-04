@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -407,6 +408,8 @@ type MetadataTable struct {
 	fakePrimaryKey                bool
 	onError                       int
 	fullName                      string
+	listColsSQL                   string
+	listColsCSV                   string
 	query_for_reader_interval     string
 	param_indices_interval_lo_qry []int
 	param_indices_interval_up_qry []int
@@ -602,10 +605,13 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	sql_cond_lower_pk, qry_indices_lo_bound := generatePredicat(result.primaryKey, true)
 	sql_cond_upper_pk, qry_indices_up_bound := generatePredicat(result.primaryKey, false)
 	sql_cond_equal_pk, qry_indices_equality := generateEqualityPredicat(result.primaryKey)
-	sql_tab_cols := generateListCols4Sql(result.columnInfos)
-	result.query_for_reader_equality = fmt.Sprintf("/* paradump */ select %s from %s where ( %s )           ", sql_tab_cols, result.fullName, sql_cond_equal_pk)
+
+	result.listColsSQL = generateListCols4Sql(result.columnInfos)
+	result.listColsCSV = generateListCols4Csv(result.columnInfos)
+
+	result.query_for_reader_equality = fmt.Sprintf("/* paradump */ select %s from %s where ( %s )           ", result.listColsSQL, result.fullName, sql_cond_equal_pk)
 	result.param_indices_equality_qry = qry_indices_equality
-	result.query_for_reader_interval = fmt.Sprintf("/* paradump */ select %s from %s where ( %s ) and ( %s) ", sql_tab_cols, result.fullName, sql_cond_lower_pk, sql_cond_upper_pk)
+	result.query_for_reader_interval = fmt.Sprintf("/* paradump */ select %s from %s where ( %s ) and ( %s) ", result.listColsSQL, result.fullName, sql_cond_lower_pk, sql_cond_upper_pk)
 	result.param_indices_interval_lo_qry = qry_indices_lo_bound
 	result.param_indices_interval_up_qry = qry_indices_up_bound
 
@@ -613,10 +619,10 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	result.cntPkCols = len(result.primaryKey)
 	// ---------------------------------------------------------------------------------
 	if dumpmode == "cpy" {
-		result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, sql_tab_cols)
+		result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
 	} else {
 		if dumpinsertwithcol == "full" {
-			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s`(%s) VALUES (", result.tbName, sql_tab_cols)
+			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s`(%s) VALUES (", result.tbName, result.listColsSQL)
 		} else {
 			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s` VALUES (", result.tbName)
 		}
@@ -722,6 +728,7 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool,
 	if cnt > 0 {
 		log.Fatalf("too many ERRORS")
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].cntRows > result[j].cntRows })
 	return result, true
 }
 
@@ -1276,6 +1283,17 @@ func generateListCols4Sql(col_inf []columnInfo) string {
 }
 
 // ------------------------------------------------------------------------------------------
+func generateListCols4Csv(col_inf []columnInfo) string {
+	a_str := col_inf[0].colName
+	ctab := 1
+	for ctab < len(col_inf) {
+		a_str = a_str + "," + col_inf[ctab].colName
+		ctab++
+	}
+	return a_str
+}
+
+// ------------------------------------------------------------------------------------------
 func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int) {
 	// ----------------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
@@ -1573,19 +1591,11 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 				}
 				if file_is_empty[last_tableid] {
 					if dumpheader {
-						var n_pat string
 						if dumpmode == "csv" {
-							n_pat = "%s"
+							ChunkReaderDumpHeader(dumpmode, zst_enc, tableInfos[last_tableid].listColsCSV)
 						} else {
-							n_pat = "`%s`"
+							ChunkReaderDumpHeader(dumpmode, zst_enc, tableInfos[last_tableid].listColsSQL)
 						}
-						sql_tab_cols := fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[0].colName)
-						ctab := 1
-						for ctab < len(tableInfos[last_tableid].columnInfos) {
-							sql_tab_cols = sql_tab_cols + "," + fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[ctab].colName)
-							ctab++
-						}
-						ChunkReaderDumpHeader(dumpmode, zst_enc, sql_tab_cols)
 					}
 					file_is_empty[last_tableid] = false
 				}
@@ -1619,19 +1629,11 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 				}
 				if file_is_empty[last_tableid] {
 					if dumpheader {
-						var n_pat string
 						if dumpmode == "csv" {
-							n_pat = "%s"
+							ChunkReaderDumpHeader(dumpmode, und_fh, tableInfos[last_tableid].listColsCSV)
 						} else {
-							n_pat = "`%s`"
+							ChunkReaderDumpHeader(dumpmode, und_fh, tableInfos[last_tableid].listColsSQL)
 						}
-						sql_tab_cols := fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[0].colName)
-						ctab := 1
-						for ctab < len(tableInfos[last_tableid].columnInfos) {
-							sql_tab_cols = sql_tab_cols + "," + fmt.Sprintf(n_pat, tableInfos[last_tableid].columnInfos[ctab].colName)
-							ctab++
-						}
-						ChunkReaderDumpHeader(dumpmode, und_fh, sql_tab_cols)
 					}
 					file_is_empty[last_tableid] = false
 				}
