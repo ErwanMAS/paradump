@@ -135,86 +135,9 @@ echo "Test  19: ok ( $? )"
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  20: failure" && exit 20
 echo "Test  20: ok ( $? )"
 
-# test 100  dump whole database csv with no header => count lines
-TMPDIR_T100=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile '${TMPDIR_T100}/dump_%d_%t_%p.%m' $DEBUG_CMD " || { echo "Test 100: failure" ; exit 100 ; }
-FAIL=0
-for T in $LIST_TABLES_CSV
-do
-    CSV_CNT=0
-    for F in "${TMPDIR_T100}/dump_foobar_${T}"_*.csv
-    do
-	if [[ -s "$F" ]]
-	then
-	    CSV_CNT=$(( CSV_CNT + $( wc -l < "$F" ) ))
-	fi
-    done
-    if [[ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
-    then
-	FAIL=$((FAIL+1))
-    fi
-done
-if [[ "$FAIL" -gt 0 ]]
-then
-    echo "Test 100: failure ($FAIL)" && exit 100
-fi
-echo "Test 100: ok ( $? )"
-
-# test 101  dump whole database csv => count lines
+# test 100  dump client_info ticket_tag sql insertsize 1 => count lines and compare with mysqldump
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' $DEBUG_CMD " || { echo "Test 101: failure" ; exit 101 ; }
-FAIL=0
-for T in $LIST_TABLES_CSV
-do
-    CSV_CNT=0
-    for F in "${TMPDIR}/dump_foobar_${T}"_*.csv
-    do
-	if [[ -s "$F" ]]
-	then
-	    CSV_CNT=$(( CSV_CNT - 1 + $( wc -l < "$F" ) ))
-	fi
-    done
-    if [[ "$CSV_CNT" -ne  "$( eval "echo \$CNT_$T" )" ]]
-    then
-	FAIL=$((FAIL+1))
-    fi
-done
-if [[ "$FAIL" -gt 0 ]]
-then
-    echo "Test 101: failure ($FAIL)" && exit 101
-fi
-echo "Test 101: ok ( $? )"
-rm -rf "$TMPDIR"
-
-# test 102  dump whole database csv / zstd => count lines
-TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' -dumpcompress zstd $DEBUG_CMD " || { echo "Test 102: failure" ; exit 102 ; }
-FAIL=0
-for T in $LIST_TABLES_CSV
-do
-    CSV_CNT=0
-    for F in "${TMPDIR}/dump_foobar_${T}"_*.csv.zstd
-    do
-	if [[ -s "$F" ]]
-	then
-	    CSV_CNT=$(( CSV_CNT - 1 + $( zstdcat "$F" | wc -l ) ))
-	fi
-    done
-    if [[ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
-    then
-	FAIL=$((FAIL+1))
-    fi
-done
-if [[ "$FAIL" -gt 0 ]]
-then
-    echo "Test 102: failure ($FAIL)" && exit 102
-fi
-echo "Test 102: ok ( $? )"
-rm -rf "$TMPDIR"
-
-# test 110  dump client_info ticket_tag sql insertsize 1 => count lines and compare with mysqldump
-TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) $DEBUG_CMD " || {  echo "Test 110: failure" ; exit 110 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) $DEBUG_CMD " || {  echo "Test 100: failure" ; exit 100 ; }
 FAIL=0
 for T in $LIST_SMALL_TABLES
 do
@@ -240,7 +163,7 @@ do
     then
 	FAIL=$((FAIL+1))
     else
-	DIFF_RES=$(mktemp)
+	DIFF_RES=$(mktemp "$TMPDIR/diff_XXXXXXX")
 	diff -u <( sort "${TMPDIR}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
@@ -254,20 +177,98 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
+    echo "Test 100: failure ($FAIL)"
+    echo "info are in $TMPDIR"
+    exit 100
+fi
+echo "Test 100: ok ( $? )"
+rm -rf "$TMPDIR"
+
+# test 110  dump whole database csv with no header => count lines
+TMPDIR_T110=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_%t_%p.%m' $DEBUG_CMD " || { echo "Test 110: failure" ; exit 110 ; }
+FAIL=0
+for T in $LIST_TABLES_CSV
+do
+    CSV_CNT=0
+    for F in "${TMPDIR_T110}/dump_foobar_${T}"_*.csv
+    do
+	if [[ -s "$F" ]]
+	then
+	    CSV_CNT=$(( CSV_CNT + $( wc -l < "$F" ) ))
+	fi
+    done
+    if [[ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+if [[ "$FAIL" -gt 0 ]]
+then
     echo "Test 110: failure ($FAIL)" && exit 110
 fi
 echo "Test 110: ok ( $? )"
+
+# test 111  dump whole database csv => count lines
+TMPDIR=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' $DEBUG_CMD " || { echo "Test 111: failure" ; exit 111 ; }
+FAIL=0
+for T in $LIST_TABLES_CSV
+do
+    CSV_CNT=0
+    for F in "${TMPDIR}/dump_foobar_${T}"_*.csv
+    do
+	if [[ -s "$F" ]]
+	then
+	    CSV_CNT=$(( CSV_CNT - 1 + $( wc -l < "$F" ) ))
+	fi
+    done
+    if [[ "$CSV_CNT" -ne  "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 111: failure ($FAIL)" && exit 111
+fi
+echo "Test 111: ok ( $? )"
 rm -rf "$TMPDIR"
 
+# test 112  dump whole database csv / zstd => count lines
+TMPDIR=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' -dumpcompress zstd $DEBUG_CMD " || { echo "Test 112: failure" ; exit 112 ; }
+FAIL=0
+for T in $LIST_TABLES_CSV
+do
+    CSV_CNT=0
+    for F in "${TMPDIR}/dump_foobar_${T}"_*.csv.zstd
+    do
+	if [[ -s "$F" ]]
+	then
+	    CSV_CNT=$(( CSV_CNT - 1 + $( zstdcat "$F" | wc -l ) ))
+	fi
+    done
+    if [[ "$CSV_CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 112: failure ($FAIL)" && exit 112
+fi
+echo "Test 112: ok ( $? )"
+rm -rf "$TMPDIR"
 
-# test 111  dump whole database sql => count lines
-TMPDIR_T111=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T111}/dump_%d_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 111: failure" ; exit 111 ; }
+# test 121  dump whole database sql => count lines
+TMPDIR_T121=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 121: failure" ; exit 121 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
     SQL_CNT=0
-    for F in "${TMPDIR_T111}/dump_foobar_${T}"_*.sql
+    for F in "${TMPDIR_T121}/dump_foobar_${T}"_*.sql
     do
 	if [[ -s "$F" ]]
 	then
@@ -278,18 +279,18 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T111}/mysqldump_foobar_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_${T}.sql" 2>/dev/null
 done
 for T in $LIST_TABLES
 do
-    CNT_LINES_SRC=$(cat "${TMPDIR_T111}/dump_foobar_${T}"_*.sql | wc -l )
-    CNT_LINES_MDP=$(wc -l < "${TMPDIR_T111}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_SRC=$(cat "${TMPDIR_T121}/dump_foobar_${T}"_*.sql | wc -l )
+    CNT_LINES_MDP=$(wc -l < "${TMPDIR_T121}/mysqldump_foobar_${T}".sql )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_MDP" ]]
     then
 	FAIL=$((FAIL+1))
     else
 	DIFF_RES=$(mktemp)
-	diff -u <( sort "${TMPDIR_T111}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR_T111}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
+	diff -u <( sort "${TMPDIR_T121}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR_T121}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -302,13 +303,13 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 111: failure ($FAIL)" && exit 111
+    echo "Test 121: failure ($FAIL)" && exit 121
 fi
-echo "Test 111: ok ( $? )"
+echo "Test 121: ok ( $? )"
 
-# test 112  dump whole database sql / zstd => count lines
+# test 122  dump whole database sql / zstd => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || { echo "Test 112: failure" ; exit 112 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || { echo "Test 122: failure" ; exit 122 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
@@ -327,13 +328,13 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 112: failure ($FAIL)" && exit 112
+    echo "Test 122: failure ($FAIL)" && exit 122
 fi
-echo "Test 112: ok ( $? )"
+echo "Test 122: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 120  copy whole database sql => count rows in foobar
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 120: failure" ; exit 120 ; }
+# test 130  copy whole database sql => count rows in foobar
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 130: failure" ; exit 130 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
@@ -355,23 +356,23 @@ then
 fi
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 120: failure ($FAIL)" && exit 120
+    echo "Test 130: failure ($FAIL)" && exit 130
 fi
-echo "Test 120: ok ( $? )"
+echo "Test 130: ok ( $? )"
 
-# test 121  dump whole database csv => count lines
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T100}/dump_%d_copy_%t_%p.%m' $DEBUG_CMD " || { echo "Test 121: failure" ; exit 121  ; }
+# test 131  dump whole database csv => count lines
+eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_copy_%t_%p.%m' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
     DIFF_RES=$(mktemp)
-    CNT_LINES_SRC=$(cat "${TMPDIR_T100}/dump_foobar_${T}"_*.csv | wc -l )
-    CNT_LINES_DST=$(cat "${TMPDIR_T100}/dump_foobar_copy_${T}"_*.csv | wc -l )
+    CNT_LINES_SRC=$(cat "${TMPDIR_T110}/dump_foobar_${T}"_*.csv | wc -l )
+    CNT_LINES_DST=$(cat "${TMPDIR_T110}/dump_foobar_copy_${T}"_*.csv | wc -l )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
     then
 	FAIL=$((FAIL+1))
     else
-	diff -u <( sort "${TMPDIR_T100}/dump_foobar_${T}"_*.csv ) <( sort "${TMPDIR_T100}/dump_foobar_copy_${T}"_*.csv )  > "$DIFF_RES"
+	diff -u <( sort "${TMPDIR_T110}/dump_foobar_${T}"_*.csv ) <( sort "${TMPDIR_T110}/dump_foobar_copy_${T}"_*.csv )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -382,16 +383,16 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 121: failure ($FAIL)" && exit 121
+    echo "Test 131: failure ($FAIL)" && exit 131
 fi
-echo "Test 121: ok ( $? )"
-# test 122  dump whole database sql => count lines and compare mysqldump from t111 and from copy T120
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T111}/dump_%d_copy_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 122: failure" ; exit 122 ; }
+echo "Test 131: ok ( $? )"
+# test 132  dump whole database sql => count lines and compare mysqldump from t121 and from copy db inserted by T130
+eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_copy_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 132: failure" ; exit 132 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
     SQL_CNT=0
-    for F in "${TMPDIR_T111}/dump_"*"_copy_${T}_"*.sql
+    for F in "${TMPDIR_T121}/dump_"*"_copy_${T}_"*.sql
     do
 	if [[ -s "$F" ]]
 	then
@@ -402,18 +403,18 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T111}/mysqldump_foobar_copy_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_copy_${T}.sql" 2>/dev/null
 done
 for T in $LIST_TABLES
 do
-    CNT_LINES_SRC=$(cat "${TMPDIR_T111}/dump_foobar_${T}"_*.sql | grep -c '^INSERT' )
-    CNT_LINES_DST=$(cat "${TMPDIR_T111}/dump_foobar_copy_${T}"_*.sql | grep -c '^INSERT' )
+    CNT_LINES_SRC=$(cat "${TMPDIR_T121}/dump_foobar_${T}"_*.sql | grep -c '^INSERT' )
+    CNT_LINES_DST=$(cat "${TMPDIR_T121}/dump_foobar_copy_${T}"_*.sql | grep -c '^INSERT' )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
     then
 	FAIL=$((FAIL+1))
     else
 	DIFF_RES=$(mktemp)
-	diff -u <( sort "${TMPDIR_T111}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR_T111}/dump_foobar_copy_${T}"_*.sql )  > "$DIFF_RES"
+	diff -u <( sort "${TMPDIR_T121}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR_T121}/dump_foobar_copy_${T}"_*.sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -423,7 +424,7 @@ do
 	    rm "$DIFF_RES"
 	fi
 	DIFF_RES=$(mktemp)
-	diff -u <( sort "${TMPDIR_T111}/mysqldump_foobar_${T}".sql ) <( sort "${TMPDIR_T111}/mysqldump_foobar_copy_${T}".sql )  > "$DIFF_RES"
+	diff -u <( sort "${TMPDIR_T121}/mysqldump_foobar_${T}".sql ) <( sort "${TMPDIR_T121}/mysqldump_foobar_copy_${T}".sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -436,9 +437,9 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 122: failure ($FAIL)" && exit 122
+    echo "Test 132: failure ($FAIL)" && exit 132
 fi
-echo "Test 122: ok ( $? )"
+echo "Test 132: ok ( $? )"
 
-rm -rf "$TMPDIR_T100"
-rm -rf "$TMPDIR_T111"
+rm -rf "$TMPDIR_T110"
+rm -rf "$TMPDIR_T121"
