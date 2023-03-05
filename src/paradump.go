@@ -621,7 +621,9 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			}
 		}
 	}
-	log.Printf(" for table %s we have enum in pk for column %s", result.fullName, enumPkCols)
+	if mode_debug {
+		log.Printf(" for table %s we have enum in pk for column %s", result.fullName, enumPkCols)
+	}
 	// ---------------------------
 	sql_cond_lower_pk, qry_indices_lo_bound := generatePredicat(result.primaryKey, true, enumPkCols)
 	sql_cond_upper_pk, qry_indices_up_bound := generatePredicat(result.primaryKey, false, enumPkCols)
@@ -661,9 +663,11 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		}
 	}
 	// ---------------------------
-	if len(enumPkCols) > 0 {
-		log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_first)
-		log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_next)
+	if mode_debug {
+		if len(enumPkCols) > 0 {
+			log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_first)
+			log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_next)
+		}
 	}
 	// ---------------------------------------------------------------------------------
 	return result, true
@@ -1010,8 +1014,8 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 					}
 				}
 				end_pk_row = make([]string, tableInfos[j].cntPkCols)
-				for n, value := range a_sql_row {
-					end_pk_row[n] = value.String
+				for n := range a_sql_row {
+					end_pk_row[n] = a_sql_row[n].String
 				}
 				if mode_debug {
 					log.Printf("tableChunkBrowser: table %s query :  %s \n with %d params\nval for query: %s\nresult: %s\n", tableInfos[j].fullName, the_finish_query, len(sql_vals_pk), sql_vals_pk, end_pk_row)
@@ -1084,12 +1088,12 @@ func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_sql_row *[]sql.Nul
 		var a_simple_row rowchunk
 		a_simple_row.cols = make([]colchunk, a_table_info.cntCols)
 		// ------------------------------------------------------------------
-		for n, value := range *a_sql_row {
-			if !value.Valid {
+		for n := range *a_sql_row {
+			if !(*a_sql_row)[n].Valid {
 				a_simple_row.cols[n].kind = -1
 			} else {
 				a_simple_row.cols[n].kind = 999
-				a_str := value.String
+				a_str := (*a_sql_row)[n].String
 				a_simple_row.cols[n].val = &a_str
 			}
 		}
@@ -1155,15 +1159,15 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 			var empty_slot int = -1
 			var lru_slot int = -1
 			var lru_val int = math.MaxInt
-			for n, value := range tabReadingVars {
-				if value == nil {
+			for n := range tabReadingVars {
+				if tabReadingVars[n] == nil {
 					empty_slot = n
-				} else if value.table_id == a_chunk.table_id {
+				} else if tabReadingVars[n].table_id == a_chunk.table_id {
 					tab_found = n
 					break
 				} else {
-					if value.lastusagecnt < lru_val {
-						lru_val = value.lastusagecnt
+					if tabReadingVars[n].lastusagecnt < lru_val {
+						lru_val = tabReadingVars[n].lastusagecnt
 						lru_slot = n
 					}
 				}
@@ -1257,10 +1261,10 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 		// --------------------------------------------------------------------------
 	}
 	// ----------------------------------------------------------------------------------
-	for _, value := range tabReadingVars {
-		if value != nil {
-			value.interval_prepared_stmt.Close()
-			value.equality_prepared_stmt.Close()
+	for n := range tabReadingVars {
+		if tabReadingVars[n] != nil {
+			tabReadingVars[n].interval_prepared_stmt.Close()
+			tabReadingVars[n].equality_prepared_stmt.Close()
 		}
 	}
 	// ----------------------------------------------------------------------------------
@@ -1392,13 +1396,13 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 
 			for j := 0; j < a_dta_chunk.usedlen; j++ {
 				// -------------------------------------------------
-				for n, value := range a_dta_chunk.rows[j].cols {
-					if value.kind == -1 {
+				for n := range a_dta_chunk.rows[j].cols {
+					if a_dta_chunk.rows[j].cols[n].kind == -1 {
 						insert_sql_arr[arr_ind] = &nullStr
 					} else {
 						if tab_meta.columnInfos[n].mustBeQuote {
-							if strings.ContainsAny(*value.val, "\\\u0000\u001a\n\r\"'") {
-								v := strings.ReplaceAll(*value.val, "\\", "\\\\")
+							if strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\\\u0000\u001a\n\r\"'") {
+								v := strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\\", "\\\\")
 								v = strings.ReplaceAll(v, "\u0000", "\\0")
 								v = strings.ReplaceAll(v, "\u001a", "\\Z")
 								v = strings.ReplaceAll(v, "\n", "\\n")
@@ -1414,9 +1418,9 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 							} else {
 								var v string
 								if tab_meta.columnInfos[n].isKindBinary {
-									v = "_binary '" + *value.val + "'"
+									v = "_binary '" + *a_dta_chunk.rows[j].cols[n].val + "'"
 								} else {
-									v = "'" + *value.val + "'"
+									v = "'" + *a_dta_chunk.rows[j].cols[n].val + "'"
 								}
 								insert_sql_arr[arr_ind] = &v
 							}
@@ -1427,11 +1431,11 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 									f_prec = 53
 								}
 								f := new(big.Float).SetPrec(f_prec)
-								f.SetString(*value.val)
+								f.SetString(*a_dta_chunk.rows[j].cols[n].val)
 								v := f.Text('f', -1)
 								insert_sql_arr[arr_ind] = &v
 							} else {
-								insert_sql_arr[arr_ind] = value.val
+								insert_sql_arr[arr_ind] = a_dta_chunk.rows[j].cols[n].val
 							}
 						}
 					}
@@ -1446,8 +1450,8 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			}
 			var b strings.Builder
 			b.Grow(b_siz)
-			for _, s := range insert_sql_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols+1] {
-				b.WriteString(*s)
+			for n := range insert_sql_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols+1] {
+				b.WriteString(*insert_sql_arr[n])
 			}
 			a_str := b.String()
 			if mode_trace {
@@ -1522,19 +1526,19 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			b_siz := a_dta_chunk.usedlen * tab_meta.cntCols
 			for j := 0; j < a_dta_chunk.usedlen; j++ {
 				// -------------------------------------------------
-				for n, value := range a_dta_chunk.rows[j].cols {
-					if value.kind == -1 {
+				for n := range a_dta_chunk.rows[j].cols {
+					if a_dta_chunk.rows[j].cols[n].kind == -1 {
 						if tab_meta.columnInfos[n].isKindChar {
 							buf_arr[b_ind] = &nullStr
 						} else {
 							buf_arr[b_ind] = &emptStr
 						}
 					} else {
-						if tab_meta.columnInfos[n].mustBeQuote && strings.ContainsAny(*value.val, "\n,\"") {
-							a_str := "'" + strings.ReplaceAll(*value.val, "\"", "\"\"") + "'"
+						if tab_meta.columnInfos[n].mustBeQuote && strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\n,\"") {
+							a_str := "'" + strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\"", "\"\"") + "'"
 							buf_arr[b_ind] = &a_str
 						} else if tab_meta.columnInfos[n].haveFract {
-							timeSec, timeFract, dotFound := strings.Cut(*value.val, ".")
+							timeSec, timeFract, dotFound := strings.Cut(*a_dta_chunk.rows[j].cols[n].val, ".")
 							if dotFound {
 								timeFract = strings.TrimRight(timeFract, "0")
 								if len(timeFract) == 1 {
@@ -1543,10 +1547,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 								a_str := timeSec + "." + timeFract
 								buf_arr[b_ind] = &a_str
 							} else {
-								buf_arr[b_ind] = value.val
+								buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
 							}
 						} else {
-							buf_arr[b_ind] = value.val
+							buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
 						}
 					}
 					b_siz += len(*buf_arr[b_ind])
@@ -1556,8 +1560,8 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			}
 			var b strings.Builder
 			b.Grow(b_siz)
-			for _, s := range buf_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols] {
-				b.WriteString(*s)
+			for n := range buf_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols] {
+				b.WriteString(*buf_arr[n])
 			}
 			j_str := b.String()
 			sql2inject <- insertchunk{table_id: last_table_id, sql: &j_str}
