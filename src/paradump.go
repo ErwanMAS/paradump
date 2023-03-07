@@ -408,6 +408,7 @@ type MetadataTable struct {
 	dbName                         string
 	tbName                         string
 	cntRows                        int64
+	sizeBytes                      int64
 	storageEng                     string
 	cntCols                        int
 	cntPkCols                      int
@@ -449,13 +450,13 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows, q_err := adbConn.QueryContext(ctx, "select coalesce(TABLE_ROWS,-1),coalesce(ENGINE,'UNKNOW'),TABLE_TYPE from information_schema.tables WHERE table_schema = ? AND table_name = ?     ", dbName, tableName)
+	q_rows, q_err := adbConn.QueryContext(ctx, "select coalesce(data_length + index_length,-1),coalesce(TABLE_ROWS,-1),coalesce(ENGINE,'UNKNOW'),TABLE_TYPE from information_schema.tables WHERE table_schema = ? AND table_name = ?     ", dbName, tableName)
 	if q_err != nil {
 		log.Fatalf("can not query information_schema.tables for %s.%s\n%s", dbName, tableName, q_err.Error())
 	}
 	typeTable := "DO_NOT_EXIST"
 	for q_rows.Next() {
-		err := q_rows.Scan(&result.cntRows, &result.storageEng, &typeTable)
+		err := q_rows.Scan(&result.sizeBytes, &result.cntRows, &result.storageEng, &typeTable)
 		if err != nil {
 			log.Printf("can not query information_schema.tables for %s.%s", dbName, tableName)
 			log.Fatal(err.Error())
@@ -559,6 +560,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 				log.Printf("t.dbName         : %s", result.dbName)
 				log.Printf("t.tbName         : %s", result.tbName)
 				log.Printf("t.cntRows        : %s", result.cntRows)
+				log.Printf("t.sizeBytes      : %s", result.sizeBytes)
 				log.Printf("t.storageEng     : %s", result.storageEng)
 				var a_str string
 				for _, v := range result.columnInfos {
@@ -779,7 +781,7 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool,
 	if cnt > 0 {
 		log.Fatalf("too many ERRORS")
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].cntRows > result[j].cntRows })
+	sort.Slice(result, func(i, j int) bool { return result[i].sizeBytes > result[j].sizeBytes })
 	return result, true
 }
 
