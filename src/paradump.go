@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/klauspost/compress/zstd"
@@ -48,6 +49,12 @@ import (
 
    https://go.dev/blog/slices
 
+   https://go.dev/doc/asm
+
+   https://cmc.gitbook.io/go-internals/
+
+   https://chris124567.github.io/2021-06-21-go-performance/
+
    http://go-database-sql.org/importing.html
 
    https://gobyexample.com/
@@ -65,6 +72,8 @@ import (
    https://pkg.go.dev/reflect#DeepEqual
 
    https://github.com/JamesStewy/go-mysqldump
+
+   https://stackoverflow.com/questions/34861479/how-to-detect-when-bytes-cant-be-converted-to-string-in-go
    ------------------------------------------------------------------------------------------ */
 // ------------------------------------------------------------------------------------------
 var (
@@ -1314,6 +1323,9 @@ func generateListPkCols4Sql(col_pk []string, dml_desc string) string {
 
 // ------------------------------------------------------------------------------------------
 func generateListCols4Sql(col_inf []columnInfo) string {
+	if len(col_inf) == 0 {
+		return ""
+	}
 	a_str := "`" + col_inf[0].colName + "`"
 	for ctab := 1; ctab < len(col_inf); ctab++ {
 		a_str = a_str + ",`" + col_inf[ctab].colName + "`"
@@ -1323,6 +1335,9 @@ func generateListCols4Sql(col_inf []columnInfo) string {
 
 // ------------------------------------------------------------------------------------------
 func generateListCols4Csv(col_inf []columnInfo) string {
+	if len(col_inf) == 0 {
+		return ""
+	}
 	a_str := col_inf[0].colName
 	for ctab := 1; ctab < len(col_inf); ctab++ {
 		a_str = a_str + "," + col_inf[ctab].colName
@@ -1331,7 +1346,183 @@ func generateListCols4Csv(col_inf []columnInfo) string {
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int) {
+//
+// replicate quoting string from  mysql
+//
+// https://github.com/mysql/mysql-server/blob/mysql-5.7.5/mysys/charset.c#L823-L932
+//
+// https://en.wikipedia.org/wiki/UTF-8#Encoding
+//
+// https://stackoverflow.com/questions/34861479/how-to-detect-when-bytes-cant-be-converted-to-string-in-go
+//
+//	example https://go.dev/play/p/6yHonH0Mae
+var quote_substitute_string = [256]uint8{
+	//    1    2    3    4     5    6    7    8    9    A    B     C    D    E    F
+	'0', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'n', ' ', ' ', 'r', ' ', ' ', // 0x00-0x0F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'Z', ' ', ' ', ' ', ' ', ' ', // 0x10-0x1F
+	' ', ' ', '"', ' ', ' ', ' ', ' ', '\'', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x20-0x2F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x30-0x3F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x40-0x4F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\\', ' ', ' ', ' ', // 0x50-0x5F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x60-0x6F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x70-0x7F
+	//    1    2    3    4     5    6    7    8    9    A    B     C    D    E    F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x80-0x8F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x90-0x9F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xA0-0xAF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xB0-0xBF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xC0-0xCF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xD0-0xDF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xE0-0xEF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xF0-0xFF
+}
+
+func needCopyForquoteString(s_ptr *string) (*string, int, int, byte) {
+	s_len := len(*s_ptr)
+	if s_len == 0 {
+		return s_ptr, 0, -1, 0
+	}
+	b_pos := 0
+	var new_char byte
+	for {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string[first_char]
+		if new_char != ' ' {
+			return s_ptr, s_len, b_pos, new_char
+		}
+		b_pos++
+		if b_pos == s_len {
+			return s_ptr, s_len, -1, new_char
+		}
+	}
+}
+
+func quoteStringFromPos(s_ptr *string, s_len int, b_pos int, new_char byte) (*string, int) {
+	var new_str strings.Builder
+	new_str.WriteString((*s_ptr)[:b_pos])
+	new_str.WriteByte('\\')
+	new_str.WriteByte(new_char)
+	b_pos++
+	for b_pos < s_len {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string[first_char]
+		if new_char == ' ' {
+			new_str.WriteByte(first_char)
+		} else {
+			new_str.WriteByte('\\')
+			new_str.WriteByte(new_char)
+		}
+		b_pos++
+	}
+	n_str := new_str.String()
+	return &n_str, len(n_str)
+}
+
+var quote_substitute_binary = [256]uint8{
+	//    1    2    3    4    5    6     7    8    9    A    B     C    D    E    F
+	'0', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'n', ' ', ' ', 'r', ' ', ' ', // 0x00-0x0F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'Z', ' ', ' ', ' ', ' ', ' ', // 0x10-0x1F
+	' ', ' ', '"', ' ', ' ', ' ', ' ', '\'', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x20-0x2F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x30-0x3F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x40-0x4F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\\', ' ', ' ', ' ', // 0x50-0x5F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x60-0x6F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x70-0x7F
+	//    1    2    3    4    5    6     7    8    9    A    B     C    D    E    F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x80-0x8F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x90-0x9F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xA0-0xAF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xB0-0xBF
+	' ', ' ', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', // 0xC0-0xCF
+	'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', // 0xD0-0xDF
+	'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', // 0xE0-0xEF
+	'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xF0-0xFF
+}
+
+func quoteBinary(s_ptr *string) (*string, int) {
+	if s_ptr == nil || len(*s_ptr) == 0 {
+		return s_ptr, 0
+	}
+	b_pos := 0
+	need_a_copy := false
+	s_len := len(*s_ptr)
+	var new_char byte
+stringLoop:
+	for b_pos < s_len {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_binary[first_char]
+		switch new_char {
+		case ' ':
+			b_pos++
+		case 'f':
+			r, size := utf8.DecodeRuneInString((*s_ptr)[b_pos:])
+			if r == utf8.RuneError {
+				if first_char == 0xed && b_pos+2 < s_len && (*s_ptr)[b_pos+1] >= 0xa0 && (*s_ptr)[b_pos+1] <= 0xbf && (*s_ptr)[b_pos+2] >= 0x80 && (*s_ptr)[b_pos+2] <= 0xbf {
+					b_pos++
+					continue
+				}
+				need_a_copy = true
+				break stringLoop
+			}
+			b_pos += size
+		default:
+			need_a_copy = true
+			break stringLoop
+		}
+	}
+	if !need_a_copy {
+		return s_ptr, s_len
+	}
+	var new_str strings.Builder
+	new_str.Grow(s_len * 2)
+	new_str.WriteString((*s_ptr)[:b_pos])
+	for b_pos < s_len {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_binary[first_char]
+		switch new_char {
+		case ' ':
+			new_str.WriteByte(first_char)
+		case 'f':
+			r, size := utf8.DecodeRuneInString((*s_ptr)[b_pos:])
+			if r == utf8.RuneError {
+				// ED  a0  80   => ED  bf  bf
+				if first_char == 0xed && b_pos+2 < s_len && (*s_ptr)[b_pos+1] >= 0xa0 && (*s_ptr)[b_pos+1] <= 0xbf && (*s_ptr)[b_pos+2] >= 0x80 && (*s_ptr)[b_pos+2] <= 0xbf {
+					new_str.WriteByte(first_char)
+					new_str.WriteByte((*s_ptr)[b_pos+1])
+					new_str.WriteByte((*s_ptr)[b_pos+2])
+					b_pos += 3
+					continue
+				} else {
+					new_str.WriteByte('\\')
+					new_str.WriteByte(first_char)
+				}
+			} else {
+				new_str.WriteRune(r)
+				b_pos += size
+				continue
+			}
+		default:
+			new_str.WriteByte('\\')
+			new_str.WriteByte(new_char)
+		}
+		b_pos++
+	}
+	n_str := new_str.String()
+	return &n_str, len(n_str)
+}
+
+// ------------------------------------------------------------------------------------------
+type cachedataChunkGenerator struct {
+	table_id     int
+	lastusagecnt int
+	buf_arr      []*colchunk
+	init_size    int
+	pad_row_size int
+	tab_meta     *MetadataTable
+}
+
+// ------------------------------------------------------------------------------------------
+func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
 		// ------------------------------------------------------------------
@@ -1357,122 +1548,233 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 		betwStr := "),("
 		endStr := ");\n"
 
-		var insert_sql_arr []*string
-		var b_siz_init int
-		var last_table_id int = -1
-		var tab_meta *MetadataTable
+		var cntgenechunk int = 0
+		var last_hit int = 0
+		var cache_hit int = 0
+		var cache_miss int = 0
+
+		var tabGenVars []*cachedataChunkGenerator
+		var lastTable *cachedataChunkGenerator
+
+		tabGenVars = make([]*cachedataChunkGenerator, cntBrowser+1)
+
 		// ------------------------------------------------------------------
-		a_dta_chunk := <-rowvalueschan
 		for {
+			a_dta_chunk := <-rowvalueschan
 			if mode_debug {
 				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d usedlen %5d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, a_dta_chunk.usedlen)
 			}
 			if a_dta_chunk.table_id == -1 {
 				break
 			}
-			if last_table_id != a_dta_chunk.table_id {
-				last_table_id = a_dta_chunk.table_id
-				tab_meta = &tableInfos[last_table_id]
-				// -------------------------------------------------
-				insert_sql_arr = make([]*string, insert_size*2*tab_meta.cntCols+1)
-				// -------------------------------------------------
-				u_ind := 0
-				coma_str := ","
-				for r := 0; r < insert_size; r++ {
-					insert_sql_arr[u_ind] = &betwStr
-					u_ind += 2
-					for c := 1; c < tab_meta.cntCols; c++ {
-						insert_sql_arr[u_ind] = &coma_str
-						u_ind += 2
-					}
-				}
-				insert_sql_arr[0] = &tab_meta.query_for_insert
-				insert_sql_arr[u_ind] = &endStr
-				// -------------------------------------------------
-				b_siz_init = len(tab_meta.query_for_insert)
-			}
-			arr_ind := 1
-			b_siz := b_siz_init + a_dta_chunk.usedlen*(3+(tab_meta.cntCols-1))
+			cntgenechunk++
 
-			for j := 0; j < a_dta_chunk.usedlen; j++ {
-				// -------------------------------------------------
-				for n := range a_dta_chunk.rows[j].cols {
-					if a_dta_chunk.rows[j].cols[n].kind == -1 {
-						insert_sql_arr[arr_ind] = &nullStr
+			if lastTable != nil && lastTable.table_id == a_dta_chunk.table_id {
+				last_hit++
+			} else {
+				// --------------------------------------------------
+				var tab_found int = -1
+				var empty_slot int = -1
+				var lru_slot int = -1
+				var lru_val int = math.MaxInt
+				for n := range tabGenVars {
+					if tabGenVars[n] == nil {
+						empty_slot = n
+					} else if tabGenVars[n].table_id == a_dta_chunk.table_id {
+						tab_found = n
+						break
 					} else {
-						if tab_meta.columnInfos[n].mustBeQuote {
-							if strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\\\u0000\u001a\n\r\"'") {
-								v := strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\\", "\\\\")
-								v = strings.ReplaceAll(v, "\u0000", "\\0")
-								v = strings.ReplaceAll(v, "\u001a", "\\Z")
-								v = strings.ReplaceAll(v, "\n", "\\n")
-								v = strings.ReplaceAll(v, "\r", "\\r")
-								v = strings.ReplaceAll(v, "'", "\\'")
-								v = strings.ReplaceAll(v, "\"", "\\\"")
-								if tab_meta.columnInfos[n].isKindBinary {
-									v = "_binary '" + v + "'"
-								} else {
-									v = "'" + v + "'"
-								}
-								insert_sql_arr[arr_ind] = &v
-							} else {
-								var v string
-								if tab_meta.columnInfos[n].isKindBinary {
-									v = "_binary '" + *a_dta_chunk.rows[j].cols[n].val + "'"
-								} else {
-									v = "'" + *a_dta_chunk.rows[j].cols[n].val + "'"
-								}
-								insert_sql_arr[arr_ind] = &v
-							}
-						} else {
-							if tab_meta.columnInfos[n].isKindFloat {
-								var f_prec uint = 24
-								if tab_meta.columnInfos[n].colType == "double" {
-									f_prec = 53
-								}
-								f := new(big.Float).SetPrec(f_prec)
-								f.SetString(*a_dta_chunk.rows[j].cols[n].val)
-								v := f.Text('f', -1)
-								insert_sql_arr[arr_ind] = &v
-							} else {
-								insert_sql_arr[arr_ind] = a_dta_chunk.rows[j].cols[n].val
-							}
+						if tabGenVars[n].lastusagecnt < lru_val {
+							lru_val = tabGenVars[n].lastusagecnt
+							lru_slot = n
 						}
 					}
-					b_siz += len(*insert_sql_arr[arr_ind])
-					arr_ind += 2
+				}
+				if tab_found > -1 {
+					cache_hit++
+					lastTable = tabGenVars[tab_found]
+					lastTable.lastusagecnt = cntgenechunk
+					cache_miss++
+				} else {
+					if empty_slot == -1 {
+						empty_slot = lru_slot
+					}
+					var new_info cachedataChunkGenerator
+					tabGenVars[empty_slot] = &new_info
+					lastTable = &new_info
+					// -----------------------------------------
+					lastTable.table_id = a_dta_chunk.table_id
+					// -----------------------------------------
+					lastTable.tab_meta = &tableInfos[lastTable.table_id]
+					// -----------------------------------------
+					lastTable.buf_arr = make([]*colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
+					// -----------------------------------------
+					u_ind := 0
+					coma_str := ","
+					pad_beg_size := 0
+					pad_mid_size := 0 //  will be repeat =>  cnt rows -1
+					pad_end_size := 0
+					// -----------------------------------------
+					// row 1
+					lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &lastTable.tab_meta.query_for_insert}
+					pad_beg_size += len(lastTable.tab_meta.query_for_insert)
+					u_ind += 2
+					for c := 1; c < lastTable.tab_meta.cntCols; c++ {
+						lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &coma_str}
+						pad_beg_size += 1
+						u_ind += 2
+					}
+					if insert_size > 1 {
+						// -----------------------------------------
+						// row 2
+						lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &betwStr}
+						pad_mid_size += len(betwStr)
+						u_ind += 2
+						for c := 1; c < lastTable.tab_meta.cntCols; c++ {
+							lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &coma_str}
+							pad_mid_size += 1
+							u_ind += 2
+						}
+						// -----------------------------------------
+						for r := 2; r < insert_size; r++ {
+							for c := 0; c < lastTable.tab_meta.cntCols; c++ {
+								r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
+								lastTable.buf_arr[u_ind] = lastTable.buf_arr[r_ind]
+								u_ind += 2
+							}
+						}
+						// -----------------------------------------
+					}
+					lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &endStr}
+					pad_end_size += len(endStr)
+					// -----------------------------------------
+					lastTable.init_size = pad_beg_size + pad_end_size
+					lastTable.pad_row_size = pad_mid_size
+				}
+			}
+
+			last_cell_pos := a_dta_chunk.usedlen * 2 * lastTable.tab_meta.cntCols
+			b_siz := lastTable.init_size + (a_dta_chunk.usedlen-1)*lastTable.pad_row_size
+
+			for n := 0; n < lastTable.tab_meta.cntCols; n++ {
+				arr_ind := 1 + n*2
+				arr_ind_inc := 2 * lastTable.tab_meta.cntCols
+				// -------------------------------------------------
+				if lastTable.tab_meta.columnInfos[n].isKindBinary {
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						cell := a_dta_chunk.rows[j].cols[n]
+						var cell_size int
+						if cell.kind == -1 {
+							lastTable.buf_arr[arr_ind] = nil
+							cell_size = -6
+						} else {
+							var s_ptr *string
+							s_ptr, cell_size = quoteBinary(cell.val)
+							lastTable.buf_arr[arr_ind] = &colchunk{kind: 2, val: s_ptr}
+						}
+						b_siz += cell_size + 2 + 8
+						arr_ind += arr_ind_inc
+					}
+				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote {
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						cell := a_dta_chunk.rows[j].cols[n]
+						var cell_size int
+						if cell.kind == -1 {
+							lastTable.buf_arr[arr_ind] = nil
+							cell_size = 2
+						} else {
+							var s_ptr *string
+							var need_quote int
+							var new_char byte
+							s_ptr, cell_size, need_quote, new_char = needCopyForquoteString(cell.val)
+							if need_quote != -1 {
+								s_ptr, cell_size = quoteStringFromPos(cell.val, cell_size, need_quote, new_char)
+							}
+
+							lastTable.buf_arr[arr_ind] = &colchunk{kind: 1, val: s_ptr}
+						}
+						b_siz += cell_size + 2
+						arr_ind += arr_ind_inc
+					}
+				} else if lastTable.tab_meta.columnInfos[n].isKindFloat {
+					var f_prec uint = 24
+					if lastTable.tab_meta.columnInfos[n].colType == "double" {
+						f_prec = 53
+					}
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						cell := a_dta_chunk.rows[j].cols[n]
+						var cell_size int
+						if cell.kind == -1 {
+							lastTable.buf_arr[arr_ind] = nil
+							cell_size = 4
+						} else {
+							f := new(big.Float).SetPrec(f_prec)
+							f.SetString(*cell.val)
+							v := f.Text('f', -1)
+							cell_size = len(v)
+							lastTable.buf_arr[arr_ind] = &colchunk{kind: 0, val: &v}
+						}
+						b_siz += cell_size
+						arr_ind += arr_ind_inc
+					}
+				} else {
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						cell := a_dta_chunk.rows[j].cols[n]
+						var cell_size int
+						if cell.kind == -1 {
+							lastTable.buf_arr[arr_ind] = nil
+							cell_size = 4
+						} else {
+							lastTable.buf_arr[arr_ind] = &colchunk{kind: 0, val: cell.val}
+							cell_size = len(*cell.val)
+						}
+						b_siz += cell_size
+						arr_ind += arr_ind_inc
+					}
 				}
 				// --------------------------------------------------
 			}
 			// ----------------------------------------------------------
-			if arr_ind < 2*insert_size*tab_meta.cntCols {
-				insert_sql_arr[arr_ind-1] = &endStr
-			}
 			var b strings.Builder
 			b.Grow(b_siz)
-			for n := range insert_sql_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols+1] {
-				b.WriteString(*insert_sql_arr[n])
+			for n := range lastTable.buf_arr[:last_cell_pos] {
+				a_cell := lastTable.buf_arr[n]
+				if a_cell == nil {
+					b.WriteString(nullStr)
+				} else {
+					switch a_cell.kind {
+					case 0:
+						b.WriteString(*a_cell.val)
+					case 1:
+						b.WriteString("'")
+						b.WriteString(*a_cell.val)
+						b.WriteString("'")
+					case 2:
+						b.WriteString("_binary '")
+						b.WriteString(*a_cell.val)
+						b.WriteString("'")
+					}
+				}
 			}
+			b.WriteString(endStr)
 			a_str := b.String()
 			if mode_trace {
 				log.Printf("%s", a_str)
 			}
-			if arr_ind < 2*insert_size*tab_meta.cntCols {
-				insert_sql_arr[arr_ind-1] = &betwStr
-			}
-			if mode_trace {
-				log.Printf("%s", a_str)
+			if mode_debug {
+				if len(a_str) != b_siz {
+					log.Printf("[%02d] dataChunkGenerator bad estimation real %d vs esti %d", id, len(a_str), b_siz)
+				}
 			}
 			// ----------------------------------------------------------
 			if mode_debug {
 				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... sql len is %6d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, len(a_str))
 			}
-			sql2inject <- insertchunk{table_id: last_table_id, chunk_id: a_dta_chunk.chunk_id, sql: &a_str}
+			sql2inject <- insertchunk{table_id: lastTable.table_id, chunk_id: a_dta_chunk.chunk_id, sql: &a_str}
 			if mode_debug {
 				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... ok sql2inject", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id)
 			}
 			// ----------------------------------------------------------
-			a_dta_chunk = <-rowvalueschan
 		}
 	}
 	// --------------------------------------------------------------------------
@@ -1573,7 +1875,15 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 }
 
 // ------------------------------------------------------------------------------------------
-func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataTable, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, z_level int, z_para int) {
+type cachetableFileWriter struct {
+	table_id     int
+	lastusagecnt int
+	und_fh       *os.File
+	zst_enc      *zstd.Encoder
+}
+
+// ------------------------------------------------------------------------------------------
+func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataTable, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, z_level int, z_para int, cntBrowser int) {
 	if mode_debug {
 		if dumpcompress == "zstd" {
 			log.Printf("tableFileWriter[%d] start mode %s %s lvl %d conc %d\n", id, dumpmode, dumpcompress, z_level, z_para)
@@ -1602,100 +1912,192 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 		file_name = append(file_name, fname)
 	}
 	// ----------------------------------------------------------------------------------
-	var und_fh *os.File
-	var err error
-	last_tableid := -1
-	a_insert_sql := <-sql2inject
-	// ----------------------------
+	var cntwritechunk int = 0
+	var last_hit int = 0
+	var cache_hit int = 0
+	var cache_miss int = 0
+
+	var tabWrtVars []*cachetableFileWriter
+	var lastTable *cachetableFileWriter
+
+	tabWrtVars = make([]*cachetableFileWriter, cntBrowser+1)
+	// ----------------------------------------------------------------------------------
 	if dumpcompress == "zstd" {
 		// --------------------------------------------------------------------------
-		var zst_enc *zstd.Encoder
-		// --------------------------------------------------------------------------
-		for a_insert_sql.sql != nil {
+		for {
+			a_insert_sql := <-sql2inject
+			if a_insert_sql.sql == nil {
+				break
+			}
+			cntwritechunk++
+			// ------------------------------------------------------------------
+			if lastTable != nil && lastTable.table_id == a_insert_sql.table_id {
+				last_hit++
+			} else {
+				// ----------------------------------------------------------
+				var tab_found int = -1
+				var empty_slot int = -1
+				var lru_slot int = -1
+				var lru_val int = math.MaxInt
+				for n := range tabWrtVars {
+					if tabWrtVars[n] == nil {
+						empty_slot = n
+					} else if tabWrtVars[n].table_id == a_insert_sql.table_id {
+						tab_found = n
+						break
+					} else {
+						if tabWrtVars[n].lastusagecnt < lru_val {
+							lru_val = tabWrtVars[n].lastusagecnt
+							lru_slot = n
+						}
+					}
+				}
+				if tab_found > -1 {
+					cache_hit++
+					lastTable = tabWrtVars[tab_found]
+					lastTable.lastusagecnt = cntwritechunk
+					cache_miss++
+				} else {
+					if empty_slot == -1 {
+						empty_slot = lru_slot
+						// ------------------------------------------
+						if tabWrtVars[lru_slot].und_fh != nil {
+							if tabWrtVars[lru_slot].zst_enc != nil {
+								tabWrtVars[lru_slot].zst_enc.Close()
+							}
+							tabWrtVars[lru_slot].und_fh.Close()
+						}
+						// ------------------------------------------
+					}
+					var new_info cachetableFileWriter
+					tabWrtVars[empty_slot] = &new_info
+					lastTable = &new_info
+					// -----------------------------------------
+					lastTable.table_id = a_insert_sql.table_id
+					// --------------------------------------------------
+					fname := file_name[a_insert_sql.table_id]
+					var err error
+					lastTable.und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+					if err != nil {
+						log.Printf("can not openfile %s", fname)
+						log.Fatal(err.Error())
+					}
+					lastTable.zst_enc, err = zstd.NewWriter(lastTable.und_fh, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(z_level)), zstd.WithEncoderConcurrency(z_para))
+					if err != nil {
+						log.Printf("can not create zstd.NewWriter")
+						log.Fatal(err.Error())
+					}
+					if file_is_empty[a_insert_sql.table_id] {
+						if dumpheader {
+							if dumpmode == "csv" {
+								ChunkReaderDumpHeader(dumpmode, lastTable.zst_enc, tableInfos[a_insert_sql.table_id].listColsCSV)
+							} else {
+								ChunkReaderDumpHeader(dumpmode, lastTable.zst_enc, tableInfos[a_insert_sql.table_id].listColsSQL)
+							}
+						}
+						file_is_empty[a_insert_sql.table_id] = false
+					}
+				}
+			}
+			// ------------------------------------------------------------------
 			if mode_debug {
 				log.Printf("[%02d] tableFileWriter table %03d chunk %12d sql len %6d", id, a_insert_sql.table_id, a_insert_sql.chunk_id, len(*a_insert_sql.sql))
 			}
 			// ------------------------------------------------------------------
-			if last_tableid != a_insert_sql.table_id {
-				last_tableid = a_insert_sql.table_id
-				if und_fh != nil {
-					if zst_enc != nil {
-						zst_enc.Close()
-					}
-					und_fh.Close()
-				}
-				fname := file_name[last_tableid]
-				und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-				if err != nil {
-					log.Printf("can not openfile %s", fname)
-					log.Fatal(err.Error())
-				}
-				zst_enc, err = zstd.NewWriter(und_fh, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(z_level)), zstd.WithEncoderConcurrency(z_para))
-				if err != nil {
-					log.Printf("can not create zstd.NewWriter")
-					log.Fatal(err.Error())
-				}
-				if file_is_empty[last_tableid] {
-					if dumpheader {
-						if dumpmode == "csv" {
-							ChunkReaderDumpHeader(dumpmode, zst_enc, tableInfos[last_tableid].listColsCSV)
-						} else {
-							ChunkReaderDumpHeader(dumpmode, zst_enc, tableInfos[last_tableid].listColsSQL)
-						}
-					}
-					file_is_empty[last_tableid] = false
-				}
-			}
+			io.WriteString(lastTable.zst_enc, *a_insert_sql.sql)
 			// ------------------------------------------------------------------
-			io.WriteString(zst_enc, *a_insert_sql.sql)
-			// ------------------------------------------------------------------
-			a_insert_sql = <-sql2inject
 		}
 		// --------------------------------------------------------------------------
-		if zst_enc != nil {
-			zst_enc.Close()
+		for n := range tabWrtVars {
+			if tabWrtVars[n] != nil {
+				if tabWrtVars[n].zst_enc != nil {
+					tabWrtVars[n].zst_enc.Close()
+				}
+				tabWrtVars[n].und_fh.Close()
+			}
 		}
 	} else {
-		// --------------------------------------------------------------------------
-		for a_insert_sql.sql != nil {
-			if mode_debug {
-				log.Printf("[%02d] tableFileWriter table %03d chunk %12d sql len %6d", id, a_insert_sql.table_id, a_insert_sql.chunk_id, len(*a_insert_sql.sql))
+		for {
+			a_insert_sql := <-sql2inject
+			if a_insert_sql.sql == nil {
+				break
 			}
+			cntwritechunk++
 			// ------------------------------------------------------------------
-			if last_tableid != a_insert_sql.table_id {
-				last_tableid = a_insert_sql.table_id
-				if und_fh != nil {
-					und_fh.Close()
-				}
-				fname := file_name[last_tableid]
-				und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-				if err != nil {
-					log.Printf("can not openfile %s", fname)
-					log.Fatal(err.Error())
-				}
-				if file_is_empty[last_tableid] {
-					if dumpheader {
-						if dumpmode == "csv" {
-							ChunkReaderDumpHeader(dumpmode, und_fh, tableInfos[last_tableid].listColsCSV)
-						} else {
-							ChunkReaderDumpHeader(dumpmode, und_fh, tableInfos[last_tableid].listColsSQL)
+			if lastTable != nil && lastTable.table_id == a_insert_sql.table_id {
+				last_hit++
+			} else {
+				// ----------------------------------------------------------
+				var tab_found int = -1
+				var empty_slot int = -1
+				var lru_slot int = -1
+				var lru_val int = math.MaxInt
+				for n := range tabWrtVars {
+					if tabWrtVars[n] == nil {
+						empty_slot = n
+					} else if tabWrtVars[n].table_id == a_insert_sql.table_id {
+						tab_found = n
+						break
+					} else {
+						if tabWrtVars[n].lastusagecnt < lru_val {
+							lru_val = tabWrtVars[n].lastusagecnt
+							lru_slot = n
 						}
 					}
-					file_is_empty[last_tableid] = false
+				}
+				if tab_found > -1 {
+					cache_hit++
+					lastTable = tabWrtVars[tab_found]
+					lastTable.lastusagecnt = cntwritechunk
+					cache_miss++
+				} else {
+					if empty_slot == -1 {
+						empty_slot = lru_slot
+						// ------------------------------------------
+						if tabWrtVars[lru_slot].und_fh != nil {
+							tabWrtVars[lru_slot].und_fh.Close()
+						}
+						// ------------------------------------------
+					}
+					var new_info cachetableFileWriter
+					tabWrtVars[empty_slot] = &new_info
+					lastTable = &new_info
+					// -----------------------------------------
+					lastTable.table_id = a_insert_sql.table_id
+					// --------------------------------------------------
+					fname := file_name[lastTable.table_id]
+					var err error
+					lastTable.und_fh, err = os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+					if err != nil {
+						log.Printf("can not openfile %s", fname)
+						log.Fatal(err.Error())
+					}
+					if file_is_empty[lastTable.table_id] {
+						if dumpheader {
+							if dumpmode == "csv" {
+								ChunkReaderDumpHeader(dumpmode, lastTable.und_fh, tableInfos[lastTable.table_id].listColsCSV)
+							} else {
+								ChunkReaderDumpHeader(dumpmode, lastTable.und_fh, tableInfos[lastTable.table_id].listColsSQL)
+							}
+						}
+						file_is_empty[lastTable.table_id] = false
+					}
 				}
 			}
 			// ------------------------------------------------------------------
-			io.WriteString(und_fh, *a_insert_sql.sql)
+			io.WriteString(lastTable.und_fh, *a_insert_sql.sql)
 			// ------------------------------------------------------------------
 			if mode_debug {
 				log.Printf("[%02d] tableFileWriter table %03d chunk %12d wait next", id, a_insert_sql.table_id, a_insert_sql.chunk_id)
 			}
-			a_insert_sql = <-sql2inject
+			// ------------------------------------------------------------------
 		}
 		// --------------------------------------------------------------------------
-	}
-	if und_fh != nil {
-		und_fh.Close()
+		for n := range tabWrtVars {
+			if tabWrtVars[n] != nil {
+				tabWrtVars[n].und_fh.Close()
+			}
+		}
 	}
 	// ----------------------------------------------------------------------------------
 	if mode_debug {
@@ -1944,7 +2346,7 @@ func main() {
 		wg_gen.Add(1)
 		go func(id int) {
 			defer wg_gen.Done()
-			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, sql_to_write, *arg_insert_size)
+			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, sql_to_write, *arg_insert_size, cntBrowser)
 		}(j)
 	}
 	// ------------
@@ -1964,7 +2366,7 @@ func main() {
 			wg_wrt.Add(1)
 			go func(id int) {
 				defer wg_wrt.Done()
-				tableFileWriter(sql_to_write, id, r, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, zstd_level, zstd_concur)
+				tableFileWriter(sql_to_write, id, r, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, zstd_level, zstd_concur, cntBrowser)
 			}(j)
 		}
 	}
