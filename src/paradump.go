@@ -938,7 +938,7 @@ func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableI
 		if mode_debug {
 			log.Printf("table %s size pk %d query :  %s \n", tableInfos[j].fullName, tableInfos[j].cntPkCols, tableInfos[j].query_for_browser_first)
 		}
-		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, _ = context.WithTimeout(context.Background(), 16*time.Second)
 		q_rows, q_err := adbConn.QueryContext(ctx, tableInfos[j].query_for_browser_first)
 		if q_err != nil {
 			log.Fatalf("can not query table %s to get first pk aka ( %s )\n%s", tableInfos[j].fullName, tableInfos[j].listColsPkSQL, q_err.Error())
