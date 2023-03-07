@@ -2,6 +2,8 @@
 
 cd "$(dirname "$0")" || exit 200
 
+exec &> >( while read -r L ; do echo "$(date '+%b %d %T')" "$L" ; done )
+
 BINARY=../src/paradump
 
 DEBUG_CMD=">/dev/null 2>&1"
@@ -157,14 +159,14 @@ do
 done
 for T in $LIST_SMALL_TABLES
 do
-    CNT_LINES_SRC=$(cat "${TMPDIR}/dump_foobar_${T}"_*.sql | wc -l )
-    CNT_LINES_MDP=$(wc -l < "${TMPDIR}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_SRC=$(cat "${TMPDIR}/dump_foobar_${T}"_*.sql | LANG=C grep -c '^INSERT' )
+    CNT_LINES_MDP=$(LANG=C grep -c '^INSERT' < "${TMPDIR}/mysqldump_foobar_${T}".sql )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_MDP" ]]
     then
 	FAIL=$((FAIL+1))
     else
 	DIFF_RES=$(mktemp "$TMPDIR/diff_XXXXXXX")
-	diff -u <( sort "${TMPDIR}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
+	LANG=C diff -a -u <(LANG=C  sort "${TMPDIR}/dump_foobar_${T}"_*.sql ) <(LANG=C sort "${TMPDIR}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -205,7 +207,9 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 110: failure ($FAIL)" && exit 110
+    echo "Test 110: failure ($FAIL)"
+    echo "info are in $TMPDIR"
+    exit 110
 fi
 echo "Test 110: ok ( $? )"
 
@@ -283,14 +287,14 @@ do
 done
 for T in $LIST_TABLES
 do
-    CNT_LINES_SRC=$(cat "${TMPDIR_T121}/dump_foobar_${T}"_*.sql | wc -l )
-    CNT_LINES_MDP=$(wc -l < "${TMPDIR_T121}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_SRC=$(cat "${TMPDIR_T121}/dump_foobar_${T}"_*.sql | LANG=C grep -c '^INSERT' )
+    CNT_LINES_MDP=$(LANG=C wc -l < "${TMPDIR_T121}/mysqldump_foobar_${T}".sql )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_MDP" ]]
     then
 	FAIL=$((FAIL+1))
     else
-	DIFF_RES=$(mktemp)
-	diff -u <( sort "${TMPDIR_T121}/dump_foobar_${T}"_*.sql ) <( sort "${TMPDIR_T121}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
+	DIFF_RES=$(mktemp "${TMPDIR_T121}/diff_XXXXXXX")
+	LANG=C diff -a -u <(LANG=C sort "${TMPDIR_T121}/dump_foobar_${T}"_*.sql ) <(LANG=C sort "${TMPDIR_T121}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -303,7 +307,9 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 121: failure ($FAIL)" && exit 121
+    echo "Test 121: failure ($FAIL)"
+    echo "info are in $TMPDIR_T121"
+    exit 121
 fi
 echo "Test 121: ok ( $? )"
 
@@ -347,12 +353,12 @@ done
 CNT_TAG_MATCH_U8=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_u8 = hex(cast(convert(label using utf8mb4)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+32))
 fi
 CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_L1" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1024))
 fi
 if [[ "$FAIL" -gt 0 ]]
 then
