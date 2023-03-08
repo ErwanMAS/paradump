@@ -407,6 +407,7 @@ type aTable struct {
 type MetadataTable struct {
 	dbName                         string
 	tbName                         string
+	isEmpty                        bool
 	cntRows                        int64
 	sizeBytes                      int64
 	storageEng                     string
@@ -416,6 +417,7 @@ type MetadataTable struct {
 	primaryKey                     []string
 	Indexes                        []indexInfo
 	fakePrimaryKey                 bool
+	withTrigger                    bool
 	onError                        int
 	fullName                       string
 	listColsSQL                    string
@@ -436,12 +438,14 @@ type MetadataTable struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string) (MetadataTable, bool) {
+func GetBasicMetadataInfo(adbConn sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
 	var result MetadataTable
 	result.dbName = dbName
 	result.tbName = tableName
 	result.fakePrimaryKey = false
 	result.onError = 0
+	result.isEmpty = true
+	result.withTrigger = false
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	p_err := adbConn.PingContext(ctx)
@@ -511,9 +515,55 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		result.primaryKey = append(result.primaryKey, a_str)
 	}
 
-	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+	// ---------------------------------------------------------------------------------
+	result.fullName = fmt.Sprintf("`%s`.`%s`", result.dbName, result.tbName)
+	result.cntCols = len(result.columnInfos)
+	// ---------------------------------------------------------------------------------
+	if result.onError == 0 {
+		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME,coalesce(CARDINALITY,0),INDEX_NAME  from INFORMATION_SCHEMA.STATISTICS WHERE  table_schema = ? and table_name = ? and INDEX_NAME != 'PRIMARY' order by INDEX_NAME,SEQ_IN_INDEX", dbName, tableName)
+		q_rows, q_err = adbConn.QueryContext(ctx, fmt.Sprintf("select 1 from %s limit 1", result.fullName))
+		if q_err != nil {
+			log.Fatalf("can not query the table %s for one row\n", result.fullName, q_err.Error())
+		}
+		for q_rows.Next() {
+			var a_bigint uint64
+			err := q_rows.Scan(&a_bigint)
+			if err != nil {
+				log.Printf("can not scan a simple value from %s", result.fullName)
+				log.Fatal(err.Error())
+			}
+			result.isEmpty = false
+		}
+		// -------------------------------------------------------------------------
+		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+		q_rows, q_err = adbConn.QueryContext(ctx, "select count(*) from INFORMATION_SCHEMA.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ?", dbName, tableName)
+		if q_err != nil {
+			log.Fatalf("can not query INFORMATION_SCHEMA.TRIGGERS to detect trigger for table %s (%s) ", result.fullName, q_err.Error())
+		}
+		for q_rows.Next() {
+			var a_bigint uint64
+			err := q_rows.Scan(&a_bigint)
+			if err != nil {
+				log.Printf("can not scan count from INFORMATION_SCHEMA.TRIGGERS for table %s", result.fullName)
+				log.Fatal(err.Error())
+			}
+			result.withTrigger = a_bigint > 0
+		}
+		// -------------------------------------------------------------------------
+	}
+	// ---------------------------------------------------------------------------------
+	return result, true
+}
+
+// ------------------------------------------------------------------------------------------
+func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string) (MetadataTable, bool) {
+	result, _ := GetBasicMetadataInfo(adbConn, dbName, tableName)
+
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows, q_err := adbConn.QueryContext(ctx, "select COLUMN_NAME,coalesce(CARDINALITY,0),INDEX_NAME  from INFORMATION_SCHEMA.STATISTICS WHERE  table_schema = ? and table_name = ? and INDEX_NAME != 'PRIMARY' order by INDEX_NAME,SEQ_IN_INDEX", dbName, tableName)
 	if q_err != nil {
 		log.Fatalf("can not query INFORMATION_SCHEMA.STATISTICS  to get index infos for %s.%s\n%s", dbName, tableName, q_err.Error())
 	}
@@ -617,9 +667,6 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 			}
 		}
 	}
-	// ---------------------------------------------------------------------------------
-	result.fullName = fmt.Sprintf("`%s`.`%s`", result.dbName, result.tbName)
-	result.cntCols = len(result.columnInfos)
 	result.cntPkCols = len(result.primaryKey)
 	// ---------------------------------------------------------------------------------
 	enumPkCols := make([]string, 0)
@@ -633,7 +680,9 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 		}
 	}
 	if mode_debug {
-		log.Printf(" for table %s we have enum in pk for column %s", result.fullName, enumPkCols)
+		if len(enumPkCols) > 0 {
+			log.Printf(" for table %s we have enum in pk for column %s", result.fullName, enumPkCols)
+		}
 	}
 	// ---------------------------
 	sql_cond_lower_pk, qry_indices_lo_bound := generatePredicat(result.primaryKey, true, enumPkCols)
@@ -783,6 +832,39 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool,
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].sizeBytes > result[j].sizeBytes })
 	return result, true
+}
+
+// ------------------------------------------------------------------------------------------
+func CheckTableOnDestination(adbConn sql.Conn, a_table MetadataTable) (string, bool) {
+	dstinfo, _ := GetBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+	res := reflect.DeepEqual(a_table.columnInfos, dstinfo.columnInfos)
+	err_msg := ""
+	if !res {
+		err_msg = fmt.Sprintf("columns definitions are not identical for %s", a_table.fullName)
+	}
+	if dstinfo.withTrigger {
+		err_msg = err_msg + fmt.Sprintf(" / table %s have triggers", a_table.fullName)
+	}
+	if !dstinfo.isEmpty {
+		err_msg = err_msg + fmt.Sprintf(" / table %s is not empty", a_table.fullName)
+	}
+	return err_msg, err_msg != ""
+}
+
+// ------------------------------------------------------------------------------------------
+func CheckTablesOnDestination(adbConn sql.Conn, infTables []MetadataTable) {
+	cnterr := 0
+	for n := range infTables {
+		msg, err := CheckTableOnDestination(adbConn, infTables[n])
+		if err {
+			log.Printf("issue with table %s.%s on destination", infTables[n].dbName, infTables[n].tbName)
+			log.Printf("%s", msg)
+			cnterr++
+		}
+	}
+	if cnterr > 0 {
+		log.Fatalf("too many ERRORS")
+	}
 }
 
 // ------------------------------------------------------------------------------------------
@@ -2286,6 +2368,9 @@ func main() {
 	r, _ := GetMetadataInfo4Tables(conSrc[0], tables2dump, *arg_guess_pk, *arg_dumpmode, *arg_dumpinsert)
 	if mode_debug {
 		log.Printf("tables infos  => %s", r)
+	}
+	if *arg_dumpmode == "cpy" {
+		CheckTablesOnDestination(conDst[0], r)
 	}
 	// ----------------------------------------------------------------------------------
 	//
