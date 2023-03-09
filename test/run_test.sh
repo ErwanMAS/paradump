@@ -246,7 +246,7 @@ FAIL=0
 for T in $LIST_TABLES_CSV
 do
     CSV_CNT=0
-    for F in "${TMPDIR}/dump_foobar_${T}"_*.csv.zstd
+    for F in "${TMPDIR}/dump_foobar_${T}"_*.csv.zst
     do
 	if [[ -s "$F" ]]
 	then
@@ -320,7 +320,7 @@ FAIL=0
 for T in $LIST_TABLES
 do
     SQL_CNT=0
-    for F in "${TMPDIR}/dump_foobar_${T}"_*.sql.zstd
+    for F in "${TMPDIR}/dump_foobar_${T}"_*.sql.zst
     do
 	if [[ -s "$F" ]]
 	then

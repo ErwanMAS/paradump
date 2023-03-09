@@ -1981,9 +1981,9 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 	for _, v := range tableInfos {
 		var fname string
 		if dumpcompress == "zstd" {
-			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate+"."+dumpcompress, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", dumpmode)
+			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", "."+dumpmode), "%z", ".zst")
 		} else {
-			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", dumpmode)
+			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", "."+dumpmode), "%z", "")
 		}
 		fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
@@ -2247,8 +2247,8 @@ func main() {
 	arg_db_parr := flag.Int("parallel", 10, "number of workers")
 	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
 	arg_insert_size := flag.Int("insertsize", 500, "rows count for each insert")
-	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p.%m", "sql dump of tables")
-	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql / cpy ")
+	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p%m%z", "template for dump filename of tables")
+	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql or cpy (copy between 2 databases instances)")
 	arg_dumpheader := flag.Bool("dumpheader", true, "add a header on csv/sql")
 	arg_dumpinsert := flag.String("dumpinsert", "full", "specify column names on insert , full /simple ")
 	arg_dumpparr := flag.Int("dumpparallel", 5, "number of file writers")

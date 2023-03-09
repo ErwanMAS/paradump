@@ -105,7 +105,7 @@ done
 echo "loading data"
 for DB in foobar barfoo
 do
-    for D in dump_*.sql.zstd
+    for D in init_*.sql.zst
     do
 	(
 	    echo "loading  $D  on DB $DB"
@@ -123,7 +123,7 @@ wait
 echo "optimize table"
 for DB in foobar barfoo
 do
-    for D in dump_*.sql.zstd
+    for D in init_*.sql.zst
     do
 	(
 	    T=$(echo "$D" | cut -d_ -f2- | cut -d. -f1)
