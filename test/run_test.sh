@@ -139,7 +139,7 @@ echo "Test  20: ok ( $? )"
 
 # test 100  dump client_info ticket_tag sql insertsize 1 => count lines and compare with mysqldump
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) $DEBUG_CMD " || {  echo "Test 100: failure" ; exit 100 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) $DEBUG_CMD " || {  echo "Test 100: failure" ; exit 100 ; }
 FAIL=0
 for T in $LIST_SMALL_TABLES
 do
@@ -188,7 +188,7 @@ rm -rf "$TMPDIR"
 
 # test 110  dump whole database csv with no header => count lines
 TMPDIR_T110=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_%t_%p.%m' $DEBUG_CMD " || { echo "Test 110: failure" ; exit 110 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 110: failure" ; exit 110 ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -215,7 +215,7 @@ echo "Test 110: ok ( $? )"
 
 # test 111  dump whole database csv => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' $DEBUG_CMD " || { echo "Test 111: failure" ; exit 111 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 111: failure" ; exit 111 ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -241,7 +241,7 @@ rm -rf "$TMPDIR"
 
 # test 112  dump whole database csv / zstd => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' -dumpcompress zstd $DEBUG_CMD " || { echo "Test 112: failure" ; exit 112 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' -dumpcompress zstd $DEBUG_CMD " || { echo "Test 112: failure" ; exit 112 ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -267,7 +267,7 @@ rm -rf "$TMPDIR"
 
 # test 121  dump whole database sql => count lines
 TMPDIR_T121=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 121: failure" ; exit 121 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 121: failure" ; exit 121 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
@@ -315,7 +315,7 @@ echo "Test 121: ok ( $? )"
 
 # test 122  dump whole database sql / zstd => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p.%m' -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || { echo "Test 122: failure" ; exit 122 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' -dumpcompress zstd -insertsize 1 $DEBUG_CMD " || { echo "Test 122: failure" ; exit 122 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
@@ -367,7 +367,7 @@ fi
 echo "Test 130: ok ( $? )"
 
 # test 131  dump whole database csv => count lines
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_copy_%t_%p.%m' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
+eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_copy_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -393,7 +393,7 @@ then
 fi
 echo "Test 131: ok ( $? )"
 # test 132  dump whole database sql => count lines and compare mysqldump from t121 and from copy db inserted by T130
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_copy_%t_%p.%m' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 132: failure" ; exit 132 ; }
+eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_copy_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 132: failure" ; exit 132 ; }
 FAIL=0
 for T in $LIST_TABLES
 do

@@ -2,7 +2,7 @@ create table mail_queue (
         id             bigint ,
         env_to       varchar(32) DEFAULT NULL,
     env_from     varchar(32) DEFAULT NULL,
-    mail_date    timestamp  DEFAULT CURRENT_TIMESTAMP ,
+    mail_date    timestamp  NOT NULL DEFAULT CURRENT_TIMESTAMP ,
         subject      varchar(32) DEFAULT NULL,
         part_1_type  varchar(32) DEFAULT NULL,
         part_1_body  text        DEFAULT NULL,
