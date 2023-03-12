@@ -638,6 +638,9 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 				log.Printf("t.onError        : %s", result.onError)
 			}
 			// -----------------------------------------------------------------
+			//
+			// result.Indexes contains a list of all indexes AND in case of multi-columns indexes ALL implicit indexes you can have
+			//
 			var max_cardinality int64
 			max_cardinality = -1
 			ix_pos := -1
