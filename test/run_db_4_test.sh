@@ -38,7 +38,7 @@ fi
 
 if [[ "$(uname -s)" != "Darwin"  ]]
 then
-    MEM_GB=$(( ( ( $(cat /proc/meminfo  | sed 's/^MemTotal:  *\([0-9]*\) kB$/\1/p;d' ) / 1024 ) / 1024 ) ))
+    MEM_GB=$(( ( $( sed 's/^MemTotal:  *\([0-9]*\) kB$/\1/p;d' /proc/meminfo ) / 1024 ) / 1024 ))
 else
     MEM_GB=$(( ( ( $( sysctl hw.memsize | sed 's/^hw.memsize: \([0-9][0-9]*\)$/\1/' ) / 1024 ) / 1024 ) / 1024 ))
 fi
@@ -137,7 +137,7 @@ do
 	    else
 		CONTAINER_DST=mysql_source
 	    fi
-	    ( time zstd -dc "${D}" | $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST sh -c '/usr/bin/mysql  -u foobar  -h localhost foobar ' ) 2>&1
+	    ( time zstd -dc "${D}" | $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST sh -c "/usr/bin/mysql  -u foobar  -h localhost ${DB} "  ) 2>&1
 	) | tail -100 &
     done
 done
@@ -156,7 +156,7 @@ do
 	    else
 		CONTAINER_DST=mysql_source
 	    fi
-	    ( time $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost foobar -e 'optimize table $T;' " ) 2>&1
+	    ( time $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost ${DB} -e 'optimize table $T;' " ) 2>&1
 	) | tail -100 &
     done
 done
