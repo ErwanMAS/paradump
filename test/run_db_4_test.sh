@@ -35,6 +35,28 @@ if [[ $CNT_ERR -gt 0 ]]
 then
     exit 1
 fi
+
+if [[ "$(uname -s)" != "Darwin"  ]]
+then
+    MEM_GB=$(( ( ( $(cat /proc/meminfo  | sed 's/^MemTotal:  *\([0-9]*\) kB$/\1/p;d' ) / 1024 ) / 1024 ) ))
+else
+    MEM_GB=$(( ( ( $( sysctl hw.memsize | sed 's/^hw.memsize: \([0-9][0-9]*\)$/\1/' ) / 1024 ) / 1024 ) / 1024 ))
+fi
+
+MYSQL_BUF="25G"
+if [[ "$MEM_GB" -le 64 ]]
+then
+    MYSQL_BUF="15G"
+fi
+if [[ "$MEM_GB" -le 32 ]]
+then
+    MYSQL_BUF="7G"
+fi
+if [[ "$MEM_GB" -le 16 ]]
+then
+    MYSQL_BUF="3G"
+fi
+
 echo creating docker database instances
 
 for V in $SRC_DB=4000 $TGT_DB=5000
@@ -58,9 +80,9 @@ do
 	DCK_NET="--publish=$PRT:3306"
     fi
     $NEED_SUDO docker run                            "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
-	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=24G --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8                                  ||
+	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8                                  ||
 	$NEED_SUDO docker run --platform=linux/amd64 "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
-	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size=24G --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
+	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
 done
 echo creating database objects
 for V in $SRC_DB=4000 $TGT_DB=5000
