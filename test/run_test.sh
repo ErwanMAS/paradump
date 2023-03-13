@@ -28,11 +28,19 @@ docker ps -a -q >/dev/null 2>&1 || {
 DCK_MYSQL="$NEED_SUDO docker run --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysql"
 DCK_MYSQL_DUMP="$NEED_SUDO docker run --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysqldump"
 
-LIST_TABLES='client_activity client_info location_history mail_queue text_notifications ticket_history ticket_tag sensor_info sensors_pairing account_metadatas'
 
-LIST_SMALL_TABLES='client_info ticket_tag text_notifications mail_queue account_metadatas'
+# tables that have binary or line return that will prevent to use CSV
+LIST_SET_1='ticket_tag account_metadatas'
+# tables that are small
+LIST_SET_2="client_info text_notifications mail_queue sensor_tag"
+# others tables
+LIST_SET_3="client_activity location_history ticket_history sensor_info sensors_pairing"
 
-LIST_TABLES_CSV='client_activity client_info location_history mail_queue text_notifications ticket_history sensor_info sensors_pairing'
+LIST_TABLES="${LIST_SET_1} ${LIST_SET_2} ${LIST_SET_3}"
+
+LIST_SMALL_TABLES="${LIST_SET_1} ${LIST_SET_2}"
+
+LIST_TABLES_CSV="${LIST_SET_2} ${LIST_SET_3}"
 
 echo "Init   0:"
 for T in $LIST_TABLES
