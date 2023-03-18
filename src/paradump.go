@@ -161,7 +161,7 @@ func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *s
 		log.Fatal("can not ping")
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
-	_, e_err := conn.ExecContext(ctx, "SET NAMES utf8mb4")
+	_, e_err := conn.ExecContext(ctx, "SET NAMES utf8mb4 COLLATE utf8mb4_general_ci")
 	if e_err != nil {
 		log.Printf("thread %d , can not set NAMES for the session\n%s\n", myId, e_err.Error())
 		infoconn <- ret_val
@@ -366,7 +366,7 @@ func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassw
 		}
 		db_conns[i] = *first_conn
 		ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
-		_, e_err := db_conns[i].ExecContext(ctx, "SET NAMES utf8mb4")
+		_, e_err := db_conns[i].ExecContext(ctx, "SET NAMES utf8mb4 COLLATE utf8mb4_general_ci")
 		if e_err != nil {
 			log.Fatalf("thread %d , can not set NAMES for the session\n%s\n", i, e_err.Error())
 		}
@@ -805,9 +805,10 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool,
 		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk, dumpmode, dumpinsertwithcol)
 		result = append(result, info)
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].fullName < result[j].fullName })
 	log.Printf("-------------------")
 	cnt := 0
-	for _, v := range result {
+	for i, v := range result {
 		if v.onError&1 == 1 && !(v.onError&16 == 16) {
 			log.Printf("table %s.%s has no primary key\n", v.dbName, v.tbName)
 			log.Print("you may want to use -guessprimarykey\n")
@@ -827,6 +828,10 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool,
 		}
 		if v.onError&16 == 16 {
 			log.Printf("table %s.%s does not exists\n", v.dbName, v.tbName)
+			cnt++
+		}
+		if i-1 >= 0 && v.onError&16 == 0 && v.fullName == result[i-1].fullName {
+			log.Printf("table %s.%s is referenced twice\n", v.dbName, v.tbName)
 			cnt++
 		}
 	}
@@ -1970,7 +1975,7 @@ type cachetableFileWriter struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataTable, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, z_level int, z_para int, cntBrowser int) {
+func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataTable, dumpdir string, dumpfiletemplate string, dumpmode string, dumpheader bool, dumpcompress string, z_level int, z_para int, cntBrowser int) {
 	if mode_debug {
 		if dumpcompress == "zstd" {
 			log.Printf("tableFileWriter[%d] start mode %s %s lvl %d conc %d\n", id, dumpmode, dumpcompress, z_level, z_para)
@@ -1983,11 +1988,13 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 	file_name := make([]string, 0)
 	for _, v := range tableInfos {
 		var fname string
+		fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", "."+dumpmode)
 		if dumpcompress == "zstd" {
-			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", "."+dumpmode), "%z", ".zst")
+			fname = strings.ReplaceAll(fname, "%z", ".zst")
 		} else {
-			fname = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(dumpfiletemplate, "%d", v.dbName), "%t", v.tbName), "%p", strconv.Itoa(id)), "%m", "."+dumpmode), "%z", "")
+			fname = strings.ReplaceAll(fname, "%z", "")
 		}
+		fname = dumpdir + strings.ReplaceAll(fname, "%%", "%")
 		fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			log.Printf("can not openfile %s", fname)
@@ -2251,6 +2258,7 @@ func main() {
 	arg_chunk_size := flag.Int("chunksize", 10000, "rows count when reading")
 	arg_insert_size := flag.Int("insertsize", 500, "rows count for each insert")
 	arg_dumpfile := flag.String("dumpfile", "dump_%d_%t_%p%m%z", "template for dump filename of tables")
+	arg_dumpdir := flag.String("dumpdir", "", "directory for dump of tables")
 	arg_dumpmode := flag.String("dumpmode", "sql", "format of the dump , csv / sql or cpy (copy between 2 databases instances)")
 	arg_dumpheader := flag.Bool("dumpheader", true, "add a header on csv/sql")
 	arg_dumpinsert := flag.String("dumpinsert", "full", "specify column names on insert , full /simple ")
@@ -2278,6 +2286,15 @@ func main() {
 	arg_dst_db_parr := flag.Int("dst-parallel", 20, "number of workers")
 	// ------------
 	flag.Parse()
+	// ------------
+	if len(flag.Args()) > 0 {
+		log.Printf("extra arguments ( non-recognized) on command line")
+		for _, v := range flag.Args() {
+			log.Printf(" '%s'    is not recognized \n", v)
+		}
+		flag.Usage()
+		os.Exit(11)
+	}
 	// ----------------------------------------------------------------------------------
 	if arg_tables2dump == nil && !*arg_all_tables {
 		log.Printf("no tables specified")
@@ -2323,18 +2340,14 @@ func main() {
 		flag.Usage()
 		os.Exit(10)
 	}
-	if len(flag.Args()) > 0 {
-		log.Printf("extra arguments ( non-recognized) on command line")
-		for _, v := range flag.Args() {
-			log.Printf(" '%s'    is not recognized \n", v)
-		}
-		flag.Usage()
-		os.Exit(11)
-	}
 	if arg_tables2dump != nil && len(arg_tables2exclude) != 0 {
 		log.Printf("can not specify table to exclude with a list of tables")
 		flag.Usage()
 		os.Exit(12)
+	}
+	if len(*arg_dumpfile) != 0 && len(*arg_dumpdir) != 0 && strings.ContainsRune(*arg_dumpfile, os.PathSeparator) {
+		flag.Usage()
+		os.Exit(13)
 	}
 	mode_trace = *arg_trace
 	if mode_trace {
@@ -2344,6 +2357,32 @@ func main() {
 	}
 	zstd_level := *arg_dumpcompress_level
 	zstd_concur := *arg_dumpcompress_concur
+	// ----------------------------------------------------------------------------------
+	if len(*arg_dumpdir) != 0 && (*arg_dumpdir)[len(*arg_dumpdir)-1] != os.PathSeparator && len(*arg_dumpfile) != 0 && (*arg_dumpfile)[0] != os.PathSeparator {
+		new_dir := *arg_dumpdir + string(os.PathSeparator)
+		arg_dumpdir = &new_dir
+	}
+	// ----------------------------------------------------------------------------------
+	if len(*arg_dumpdir) != 0 && (*arg_dumpdir)[len(*arg_dumpdir)-1] == os.PathSeparator && len(*arg_dumpfile) != 0 && (*arg_dumpfile)[0] == os.PathSeparator {
+		new_dir := (*arg_dumpdir)[0 : len(*arg_dumpdir)-1]
+		arg_dumpdir = &new_dir
+	}
+	template_file := *arg_dumpfile
+	for {
+		p := strings.IndexRune(template_file, '%')
+		if p == -1 {
+			break
+		}
+		if p+1 == len(template_file) {
+			flag.Usage()
+			os.Exit(14)
+		}
+		if template_file[p+1] != 'd' && template_file[p+1] != 't' && template_file[p+1] != 'p' && template_file[p+1] != 'm' && template_file[p+1] != 'z' && template_file[p+1] != '%' {
+			flag.Usage()
+			os.Exit(15)
+		}
+		template_file = template_file[p+2:]
+	}
 	// ----------------------------------------------------------------------------------
 	var cntBrowser int = *arg_browser_parr
 	var cntReader int = *arg_db_parr
@@ -2456,7 +2495,7 @@ func main() {
 			wg_wrt.Add(1)
 			go func(id int) {
 				defer wg_wrt.Done()
-				tableFileWriter(sql_to_write, id, r, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, zstd_level, zstd_concur, cntBrowser)
+				tableFileWriter(sql_to_write, id, r, *arg_dumpdir, *arg_dumpfile, *arg_dumpmode, *arg_dumpheader, *arg_dumpcompress, zstd_level, zstd_concur, cntBrowser)
 			}(j)
 		}
 	}

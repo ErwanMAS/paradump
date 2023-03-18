@@ -6,6 +6,8 @@ exec &> >( while read -r L ; do echo "$(date '+%b %d %T')" "$L" ; done )
 
 BINARY=../src/paradump
 
+# ------------------------------------------------------------------------------------------
+
 DEBUG_CMD=">/dev/null 2>&1"
 
 if [[ "$1" = "--debug" ]]
@@ -13,6 +15,8 @@ then
     set -x
     DEBUG_CMD=""
 fi
+
+# ------------------------------------------------------------------------------------------
 
 NEED_SUDO=""
 docker ps -a -q >/dev/null 2>&1 || {
@@ -28,12 +32,17 @@ docker ps -a -q >/dev/null 2>&1 || {
 DCK_MYSQL="$NEED_SUDO docker run --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysql"
 DCK_MYSQL_DUMP="$NEED_SUDO docker run --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysqldump"
 
-
+# ------------------------------------------------------------------------------------------
 # tables that have binary or line return that will prevent to use CSV
+#
 LIST_SET_1='ticket_tag account_metadatas'
+#
 # tables that are small
+#
 LIST_SET_2="client_info text_notifications mail_queue sensor_tag"
+#
 # others tables
+#
 LIST_SET_3="client_activity location_history ticket_history sensor_info sensors_pairing"
 
 LIST_TABLES="${LIST_SET_1} ${LIST_SET_2} ${LIST_SET_3}"
@@ -42,12 +51,21 @@ LIST_SMALL_TABLES="${LIST_SET_1} ${LIST_SET_2}"
 
 LIST_TABLES_CSV="${LIST_SET_2} ${LIST_SET_3}"
 
+# ------------------------------------------------------------------------------------------
+truncate_tables() {
+    for T in $LIST_TABLES
+    do
+	${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1 &
+	${DCK_MYSQL}  -u foobar -ptest1234 --port 4000 -h 127.0.0.1 barfoo -e "truncate table $T ;" >/dev/null 2>&1 &
+	${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
+	${DCK_MYSQL}  -u foobar -ptest1234 --port 4000 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
+    done
+    wait
+}
+# ------------------------------------------------------------------------------------------
 echo "Init   0:"
-for T in $LIST_TABLES
-do
-    ${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1
-    ${DCK_MYSQL}  -u foobar -ptest1234 --port 4000 -h 127.0.0.1 barfoo -e "truncate table $T ;" >/dev/null 2>&1
-done
+
+truncate_tables
 
 echo "Check  0:"
 for port in 5000 4000
@@ -149,14 +167,34 @@ echo "Test  19: ok ( $? )"
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  20: failure" && exit 20
 echo "Test  20: ok ( $? )"
 
+# test 21 , dumpfile & dumpdir
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar -guessprimarykey  --dumpdir=/tmp/ --dumpfile=/tmp/hjk            $DEBUG_CMD " && echo "Test  21: failure" && exit 21
+echo "Test  21: ok ( $? )"
+
+# test 22 , dumpfile bad template var
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar -guessprimarykey  --dumpdir=/tmp/ --dumpfile=dump_%r             $DEBUG_CMD " && echo "Test  22: failure" && exit 22
+echo "Test  22: ok ( $? )"
+
+# test 23 , dumpfile % at the end that is not duplicated
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -db foobar -guessprimarykey  --dumpdir=/tmp/ --dumpfile=dump_%z%            $DEBUG_CMD " && echo "Test  23: failure" && exit 23
+echo "Test  23: ok ( $? )"
+
+# test 24 , db is specified twice
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -db barfoo -db barfoo -guessprimarykey  -alltables                                             $DEBUG_CMD " && echo "Test  24: failure" && exit 24
+echo "Test  24: ok ( $? )"
+
+# test 25 , table is specified twice
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -table sensor_tag -table client_info -db barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  25: failure" && exit 25
+echo "Test  25: ok ( $? )"
+
 # test 100  dump client_info ticket_tag sql insertsize 1 => count lines and compare with mysqldump
-TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) $DEBUG_CMD " || {  echo "Test 100: failure" ; exit 100 ; }
+TMPDIR_T100=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T100}/dump_%d_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) $DEBUG_CMD " || {  echo "Test 100: failure" ; exit 100 ; }
 FAIL=0
 for T in $LIST_SMALL_TABLES
 do
     SQL_CNT=0
-    for F in "${TMPDIR}/dump_foobar_${T}"_*.sql
+    for F in "${TMPDIR_T100}/dump_foobar_${T}"_*.sql
     do
 	if [[ -s "$F" ]]
 	then
@@ -167,18 +205,18 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_foobar_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T100}/mysqldump_foobar_${T}.sql" 2>/dev/null
 done
 for T in $LIST_SMALL_TABLES
 do
-    CNT_LINES_SRC=$(cat "${TMPDIR}/dump_foobar_${T}"_*.sql | LANG=C grep -c '^INSERT' )
-    CNT_LINES_MDP=$(LANG=C grep -c '^INSERT' < "${TMPDIR}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_SRC=$(cat "${TMPDIR_T100}/dump_foobar_${T}"_*.sql | LANG=C grep -c '^INSERT' )
+    CNT_LINES_MDP=$(LANG=C grep -c '^INSERT' < "${TMPDIR_T100}/mysqldump_foobar_${T}".sql )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_MDP" ]]
     then
 	FAIL=$((FAIL+1))
     else
-	DIFF_RES=$(mktemp "$TMPDIR/diff_XXXXXXX")
-	LANG=C diff -a -u <(LANG=C  sort "${TMPDIR}/dump_foobar_${T}"_*.sql ) <(LANG=C sort "${TMPDIR}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
+	DIFF_RES=$(mktemp "$TMPDIR_T100/diff_XXXXXXX")
+	LANG=C diff -a -u <(LANG=C  sort "${TMPDIR_T100}/dump_foobar_${T}"_*.sql ) <(LANG=C sort "${TMPDIR_T100}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -192,11 +230,97 @@ done
 if [[ "$FAIL" -gt 0 ]]
 then
     echo "Test 100: failure ($FAIL)"
-    echo "info are in $TMPDIR"
+    echo "info are in $TMPDIR_T100"
     exit 100
 fi
 echo "Test 100: ok ( $? )"
-rm -rf "$TMPDIR"
+
+# test 101  copy small tables sql => count rows in foobar
+TMPDIR=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 101: failure" ; exit 101 ; }
+FAIL=0
+for T in $LIST_SMALL_TABLES
+do
+    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_foobar_${T}.sql" 2>/dev/null
+done
+for T in $LIST_SMALL_TABLES
+do
+    CNT_LINES_SRC=$(grep -c '^INSERT' "${TMPDIR_T100}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_DST=$(grep -c '^INSERT' "${TMPDIR}/mysqldump_foobar_${T}".sql )
+    if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
+    then
+	FAIL=$((FAIL+1))
+    else
+	DIFF_RES=$(mktemp)
+	diff -u <( sort "${TMPDIR_T100}/mysqldump_foobar_${T}".sql ) <( sort "${TMPDIR}/mysqldump_foobar_${T}".sql )  > "$DIFF_RES"
+	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
+	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
+	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
+	then
+	    FAIL=$((FAIL+1))
+	else
+	    rm "$DIFF_RES"
+	fi
+    fi
+done
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 101: failure ($FAIL)"
+    echo "info are in $TMPDIR"
+    echo "info T100 are in ${TMPDIR_T100}"
+    exit 101
+fi
+echo "Test 101: ok ( $? )"
+
+# test 102  copy small tables sql => count rows in barfoo
+TMPDIR=$(mktemp -d )
+eval "$BINARY  -dst-port 4000 -pwd test1234 -user foobar  -guessprimarykey -db barfoo -guessprimarykey --dumpmode cpy -port=5000 -dst-user=foobar -dst-pwd=test1234      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 102: failure" ; exit 102 ; }
+FAIL=0
+for T in $LIST_TABLES
+do
+    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 barfoo -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact barfoo "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_barfoo_${T}.sql" 2>/dev/null
+done
+for T in $LIST_SMALL_TABLES
+do
+    CNT_LINES_SRC=$(grep -c '^INSERT' "${TMPDIR_T100}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_DST=$(grep -c '^INSERT' "${TMPDIR}/mysqldump_barfoo_${T}".sql )
+    if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
+    then
+	FAIL=$((FAIL+1))
+    else
+	DIFF_RES=$(mktemp)
+	diff -u <( sort "${TMPDIR_T100}/mysqldump_foobar_${T}".sql ) <( sort "${TMPDIR}/mysqldump_barfoo_${T}".sql )  > "$DIFF_RES"
+	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
+	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
+	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
+	then
+	    FAIL=$((FAIL+1))
+	else
+	    rm "$DIFF_RES"
+	fi
+    fi
+done
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 102: failure ($FAIL)"
+    echo "info are in $TMPDIR"
+    echo "info T100 are in ${TMPDIR_T100}"
+    exit 102
+fi
+echo "Test 102: ok ( $? )"
+
+
+truncate_tables
 
 # test 110  dump whole database csv with no header => count lines
 TMPDIR_T110=$(mktemp -d )
@@ -459,5 +583,6 @@ then
 fi
 echo "Test 132: ok ( $? )"
 
+rm -rf "$TMPDIR_T100"
 rm -rf "$TMPDIR_T110"
 rm -rf "$TMPDIR_T121"

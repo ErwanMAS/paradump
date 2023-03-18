@@ -59,6 +59,8 @@ fi
 
 echo creating docker database instances
 
+declare -a EXTRA_PARAMS
+
 for V in $SRC_DB=4000 $TGT_DB=5000
 do
     IMG=$( echo "$V"| cut -d= -f1)
@@ -68,14 +70,15 @@ do
 
     if [[ "$PRT" -eq 4000 ]]
     then
-	EXTRA_PARAMS[0]=--innodb_adaptive_hash_index_partitions=8
+	EXTRA_PARAMS[0]="--innodb_adaptive_hash_index_partitions=8"
     else
-	EXTRA_PARAMS[0]=--innodb_adaptive_hash_index_parts=8
+	EXTRA_PARAMS[0]="--innodb_adaptive_hash_index_parts=8"
+	EXTRA_PARAMS[1]="--default-time-zone=America/New_York"
     fi
     if [[ "$(uname -s)" != "Darwin"  ]]
     then
 	DCK_NET="--net=host"
-	EXTRA_PARAMS[1]="--port=${PRT}"
+	EXTRA_PARAMS+=("--port=${PRT}")
     else
 	DCK_NET="--publish=$PRT:3306"
     fi
@@ -114,15 +117,24 @@ do
     do
 	for F in create_tab_*.sql
 	do
-	    echo "run $F in $DB"
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
-	done
-	for F in create_viw_*.sql
-	do
-	    echo "run $F in $DB"
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
+	    (
+		echo "run $F in $DB"
+		$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
+	    ) | tail -100 &
 	done
     done
+    wait
+    for DB in foobar barfoo test
+    do
+	for F in create_viw_*.sql
+	do
+	    (
+		echo "run $F in $DB"
+		$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
+	    ) | tail -100 &
+	done
+    done
+    wait
 done
 echo "loading data"
 for DB in foobar barfoo
@@ -159,6 +171,19 @@ do
 	    ( time $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost ${DB} -e 'optimize table $T;' " ) 2>&1
 	) | tail -100 &
     done
+done
+wait
+echo "converting barfoo on mysql_source"
+DB=barfoo
+CONTAINER_DST=mysql_source
+for D in init_*.sql.zst
+do
+    (
+        T=$(echo "$D" | cut -d_ -f2- | cut -d. -f1)
+        echo "changing charset for $T on DB $DB on mysql_source"
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST  sh -c "/usr/bin/mysql  -u foobar  -h localhost ${DB} -e 'alter table $T CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;' " 2>&1
+	echo "done for $T"
+    )	| tail -100 &
 done
 wait
 echo "done"
