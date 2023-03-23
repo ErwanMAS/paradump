@@ -1607,7 +1607,7 @@ stringLoop:
 type cachedataChunkGenerator struct {
 	table_id     int
 	lastusagecnt int
-	buf_arr      []*colchunk
+	buf_arr      []colchunk
 	init_size    int
 	pad_row_size int
 	tab_meta     *MetadataTable
@@ -1699,7 +1699,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 					// -----------------------------------------
 					lastTable.tab_meta = &tableInfos[lastTable.table_id]
 					// -----------------------------------------
-					lastTable.buf_arr = make([]*colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
+					lastTable.buf_arr = make([]colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
 					// -----------------------------------------
 					u_ind := 0
 					coma_str := ","
@@ -1708,22 +1708,26 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 					pad_end_size := 0
 					// -----------------------------------------
 					// row 1
-					lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &lastTable.tab_meta.query_for_insert}
+					lastTable.buf_arr[u_ind].val = &lastTable.tab_meta.query_for_insert
+					lastTable.buf_arr[u_ind].kind = 0
 					pad_beg_size += len(lastTable.tab_meta.query_for_insert)
 					u_ind += 2
 					for c := 1; c < lastTable.tab_meta.cntCols; c++ {
-						lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &coma_str}
+						lastTable.buf_arr[u_ind].val = &coma_str
+						lastTable.buf_arr[u_ind].kind = 0
 						pad_beg_size += 1
 						u_ind += 2
 					}
 					if insert_size > 1 {
 						// -----------------------------------------
 						// row 2
-						lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &betwStr}
+						lastTable.buf_arr[u_ind].val = &betwStr
+						lastTable.buf_arr[u_ind].kind = 0
 						pad_mid_size += len(betwStr)
 						u_ind += 2
 						for c := 1; c < lastTable.tab_meta.cntCols; c++ {
-							lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &coma_str}
+							lastTable.buf_arr[u_ind].val = &coma_str
+							lastTable.buf_arr[u_ind].kind = 0
 							pad_mid_size += 1
 							u_ind += 2
 						}
@@ -1731,13 +1735,15 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						for r := 2; r < insert_size; r++ {
 							for c := 0; c < lastTable.tab_meta.cntCols; c++ {
 								r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
-								lastTable.buf_arr[u_ind] = lastTable.buf_arr[r_ind]
+								lastTable.buf_arr[u_ind].val = lastTable.buf_arr[r_ind].val
+								lastTable.buf_arr[u_ind].kind = 0
 								u_ind += 2
 							}
 						}
 						// -----------------------------------------
 					}
-					lastTable.buf_arr[u_ind] = &colchunk{kind: 0, val: &endStr}
+					lastTable.buf_arr[u_ind].val = &endStr
+					lastTable.buf_arr[u_ind].kind = 0
 					pad_end_size += len(endStr)
 					// -----------------------------------------
 					lastTable.init_size = pad_beg_size + pad_end_size
@@ -1749,79 +1755,82 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			b_siz := lastTable.init_size + (a_dta_chunk.usedlen-1)*lastTable.pad_row_size
 
 			for n := 0; n < lastTable.tab_meta.cntCols; n++ {
-				arr_ind := 1 + n*2
+				arr_ind := 1 + n*2 + (a_dta_chunk.usedlen-1)*2*lastTable.tab_meta.cntCols
 				arr_ind_inc := 2 * lastTable.tab_meta.cntCols
 				// -------------------------------------------------
 				if lastTable.tab_meta.columnInfos[n].isKindBinary {
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						var cell_size int
 						if cell.kind == -1 {
-							lastTable.buf_arr[arr_ind] = nil
-							cell_size = -6
-						} else {
-							var s_ptr *string
-							s_ptr, cell_size = quoteBinary(cell.val)
-							lastTable.buf_arr[arr_ind] = &colchunk{kind: 2, val: s_ptr}
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
 						}
+						var s_ptr *string
+						var cell_size int
+						s_ptr, cell_size = quoteBinary(cell.val)
+						lastTable.buf_arr[arr_ind].kind = 2
+						lastTable.buf_arr[arr_ind].val = s_ptr
 						b_siz += cell_size + 2 + 8
-						arr_ind += arr_ind_inc
+						arr_ind -= arr_ind_inc
 					}
 				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote {
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						var cell_size int
 						if cell.kind == -1 {
-							lastTable.buf_arr[arr_ind] = nil
-							cell_size = 2
-						} else {
-							var s_ptr *string
-							var need_quote int
-							var new_char byte
-							s_ptr, cell_size, need_quote, new_char = needCopyForquoteString(cell.val)
-							if need_quote != -1 {
-								s_ptr, cell_size = quoteStringFromPos(cell.val, cell_size, need_quote, new_char)
-							}
-
-							lastTable.buf_arr[arr_ind] = &colchunk{kind: 1, val: s_ptr}
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
+						}
+						var s_ptr *string
+						var need_quote int
+						var new_char byte
+						var cell_size int
+						s_ptr, cell_size, need_quote, new_char = needCopyForquoteString(cell.val)
+						if need_quote != -1 {
+							s_ptr, cell_size = quoteStringFromPos(cell.val, cell_size, need_quote, new_char)
 						}
 						b_siz += cell_size + 2
-						arr_ind += arr_ind_inc
+						lastTable.buf_arr[arr_ind].kind = 1
+						lastTable.buf_arr[arr_ind].val = s_ptr
+						arr_ind -= arr_ind_inc
 					}
 				} else if lastTable.tab_meta.columnInfos[n].isKindFloat {
 					var f_prec uint = 24
 					if lastTable.tab_meta.columnInfos[n].colType == "double" {
 						f_prec = 53
 					}
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						var cell_size int
 						if cell.kind == -1 {
-							lastTable.buf_arr[arr_ind] = nil
-							cell_size = 4
-						} else {
-							f := new(big.Float).SetPrec(f_prec)
-							f.SetString(*cell.val)
-							v := f.Text('f', -1)
-							cell_size = len(v)
-							lastTable.buf_arr[arr_ind] = &colchunk{kind: 0, val: &v}
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
 						}
-						b_siz += cell_size
-						arr_ind += arr_ind_inc
+						f := new(big.Float).SetPrec(f_prec)
+						f.SetString(*cell.val)
+						v := f.Text('f', -1)
+						b_siz += len(v)
+						lastTable.buf_arr[arr_ind].kind = 0
+						lastTable.buf_arr[arr_ind].val = &v
+						arr_ind -= arr_ind_inc
 					}
 				} else {
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						var cell_size int
 						if cell.kind == -1 {
-							lastTable.buf_arr[arr_ind] = nil
-							cell_size = 4
-						} else {
-							lastTable.buf_arr[arr_ind] = &colchunk{kind: 0, val: cell.val}
-							cell_size = len(*cell.val)
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
 						}
-						b_siz += cell_size
-						arr_ind += arr_ind_inc
+						lastTable.buf_arr[arr_ind].kind = 0
+						lastTable.buf_arr[arr_ind].val = cell.val
+						b_siz += len(*cell.val)
+						arr_ind -= arr_ind_inc
 					}
 				}
 				// --------------------------------------------------
@@ -1831,21 +1840,19 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			b.Grow(b_siz)
 			for n := range lastTable.buf_arr[:last_cell_pos] {
 				a_cell := lastTable.buf_arr[n]
-				if a_cell == nil {
+				switch a_cell.kind {
+				case -1:
 					b.WriteString(nullStr)
-				} else {
-					switch a_cell.kind {
-					case 0:
-						b.WriteString(*a_cell.val)
-					case 1:
-						b.WriteString("'")
-						b.WriteString(*a_cell.val)
-						b.WriteString("'")
-					case 2:
-						b.WriteString("_binary '")
-						b.WriteString(*a_cell.val)
-						b.WriteString("'")
-					}
+				case 0:
+					b.WriteString(*a_cell.val)
+				case 1:
+					b.WriteString("'")
+					b.WriteString(*a_cell.val)
+					b.WriteString("'")
+				case 2:
+					b.WriteString("_binary '")
+					b.WriteString(*a_cell.val)
+					b.WriteString("'")
 				}
 			}
 			b.WriteString(endStr)
