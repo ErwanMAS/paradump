@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"reflect"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -1936,7 +1937,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						}
 					} else {
 						if tab_meta.columnInfos[n].mustBeQuote && strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\n,\"") {
-							a_str := "'" + strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\"", "\"\"") + "'"
+							a_str := "\"" + strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\"", "\"\"") + "\""
 							buf_arr[b_ind] = &a_str
 						} else if tab_meta.columnInfos[n].haveFract {
 							timeSec, timeFract, dotFound := strings.Cut(*a_dta_chunk.rows[j].cols[n].val, ".")
@@ -2264,6 +2265,7 @@ func (i *arrayFlags) Set(value string) error {
 func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds)
 	// ----------------------------------------------------------------------------------
+	arg_cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 	arg_debug := flag.Bool("debug", false, "debug mode")
 	arg_trace := flag.Bool("trace", false, "trace mode")
 	arg_loop := flag.Int("loopcnt", 1, "how many times we are going to loop (for debugging)")
@@ -2432,6 +2434,15 @@ func main() {
 	}
 	if *arg_dumpmode == "cpy" {
 		CheckTablesOnDestination(conDst[0], r)
+	}
+	// ----------------------------------------------------------------------------------
+	if *arg_cpuprofile != "" {
+		f, err := os.Create(*arg_cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
 	}
 	// ----------------------------------------------------------------------------------
 	//
