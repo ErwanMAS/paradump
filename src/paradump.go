@@ -1970,6 +1970,18 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			a_dta_chunk = <-rowvalueschan
 		}
 	}
+	// --------------------------------------------------------------------------
+	if dumpmode == "nul" {
+		// ------------------------------------------------------------------
+		a_dta_chunk := <-rowvalueschan
+		for {
+			if a_dta_chunk.table_id == -1 {
+				break
+			}
+			// ----------------------------------------------------------
+			a_dta_chunk = <-rowvalueschan
+		}
+	}
 	// ----------------------------------------------------------------------------------
 }
 
@@ -2327,7 +2339,7 @@ func main() {
 		flag.Usage()
 		os.Exit(6)
 	}
-	if len(*arg_dumpmode) != 0 && (*arg_dumpmode != "sql" && *arg_dumpmode != "csv" && *arg_dumpmode != "cpy") {
+	if len(*arg_dumpmode) != 0 && (*arg_dumpmode != "sql" && *arg_dumpmode != "csv" && *arg_dumpmode != "nul" && *arg_dumpmode != "cpy") {
 		flag.Usage()
 		os.Exit(7)
 	}
