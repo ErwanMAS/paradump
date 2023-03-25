@@ -1924,22 +1924,17 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 			// ----------------------------------------------------------
 			nullStr := "\\N"
 			emptStr := ""
-			b_ind := 0
 			b_siz := a_dta_chunk.usedlen * tab_meta.cntCols
-			for j := 0; j < a_dta_chunk.usedlen; j++ {
+			// ----------------------------------------------------------
+			for n := 0; n < tab_meta.cntCols; n++ {
+				b_ind := n * 2
+				b_ind_inc := 2 * tab_meta.cntCols
 				// -------------------------------------------------
-				for n := range a_dta_chunk.rows[j].cols {
-					if a_dta_chunk.rows[j].cols[n].kind == -1 {
-						if tab_meta.columnInfos[n].isKindChar {
-							buf_arr[b_ind] = &nullStr
-						} else {
+				if tab_meta.columnInfos[n].haveFract {
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						if a_dta_chunk.rows[j].cols[n].kind == -1 {
 							buf_arr[b_ind] = &emptStr
-						}
-					} else {
-						if tab_meta.columnInfos[n].mustBeQuote && strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\n,\"") {
-							a_str := "\"" + strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\"", "\"\"") + "\""
-							buf_arr[b_ind] = &a_str
-						} else if tab_meta.columnInfos[n].haveFract {
+						} else {
 							timeSec, timeFract, dotFound := strings.Cut(*a_dta_chunk.rows[j].cols[n].val, ".")
 							if dotFound {
 								timeFract = strings.TrimRight(timeFract, "0")
@@ -1951,12 +1946,36 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 							} else {
 								buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
 							}
+							b_siz += len(*buf_arr[b_ind])
+						}
+						b_ind += b_ind_inc
+					}
+				} else if tab_meta.columnInfos[n].mustBeQuote && (tab_meta.columnInfos[n].isKindChar || tab_meta.columnInfos[n].isKindBinary) {
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						if a_dta_chunk.rows[j].cols[n].kind == -1 {
+							buf_arr[b_ind] = &nullStr
+							b_siz += 2
+						} else {
+							if strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\n,\"") {
+								a_str := "\"" + strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\"", "\"\"") + "\""
+								buf_arr[b_ind] = &a_str
+							} else {
+								buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
+							}
+							b_siz += len(*buf_arr[b_ind])
+						}
+						b_ind += b_ind_inc
+					}
+				} else {
+					for j := 0; j < a_dta_chunk.usedlen; j++ {
+						if a_dta_chunk.rows[j].cols[n].kind == -1 {
+							buf_arr[b_ind] = &emptStr
 						} else {
 							buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
+							b_siz += len(*buf_arr[b_ind])
 						}
+						b_ind += b_ind_inc
 					}
-					b_siz += len(*buf_arr[b_ind])
-					b_ind += 2
 				}
 				// -------------------------------------------------
 			}
