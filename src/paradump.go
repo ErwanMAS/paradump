@@ -893,7 +893,7 @@ type colchunk struct {
 }
 
 type rowchunk struct {
-	cols []colchunk
+	cols []sql.NullString
 }
 
 type datachunk struct {
@@ -1173,7 +1173,7 @@ func ChunkReaderDumpHeader(dumpmode string, cur_iow io.Writer, sql_tab_cols stri
 }
 
 // ------------------------------------------------------------------------------------------
-func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_sql_row *[]sql.NullString, a_table_info *MetadataTable, tab_id int, chk_id int64, ptrs *[]any, insert_size int, chan2gen chan datachunk) {
+func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_table_info *MetadataTable, tab_id int, chk_id int64, insert_size int, chan2gen chan datachunk) {
 	// --------------------------------------------------------------------------
 	var a_dta_chunk datachunk
 	a_dta_chunk = datachunk{usedlen: 0, chunk_id: chk_id, table_id: tab_id, rows: make([]*rowchunk, insert_size)}
@@ -1181,23 +1181,19 @@ func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_sql_row *[]sql.Nul
 	if mode_debug {
 		log.Printf("ChunkReaderDumpProcess [%02d] table %03d chunk %12d \n", threadid, tab_id, chk_id)
 	}
+	ptrs := make([]any, a_table_info.cntCols)
 	for q_rows.Next() {
-		err := q_rows.Scan(*ptrs...)
-		if err != nil {
-			log.Printf("can not scan %s ( already scan %d ) , len(ptrs) = %d , cols %s ", a_table_info.tbName, row_cnt, len(*ptrs))
-			log.Fatal(err)
-		}
 		var a_simple_row rowchunk
-		a_simple_row.cols = make([]colchunk, a_table_info.cntCols)
+		a_simple_row.cols = make([]sql.NullString, a_table_info.cntCols)
 		// ------------------------------------------------------------------
-		for n := range *a_sql_row {
-			if !(*a_sql_row)[n].Valid {
-				a_simple_row.cols[n].kind = -1
-			} else {
-				a_simple_row.cols[n].kind = 999
-				a_str := (*a_sql_row)[n].String
-				a_simple_row.cols[n].val = &a_str
-			}
+		for i := 0; i < a_table_info.cntCols; i++ {
+			ptrs[i] = &a_simple_row.cols[i]
+		}
+		// ------------------------------------------------------------------
+		err := q_rows.Scan(ptrs...)
+		if err != nil {
+			log.Printf("can not scan %s ( already scan %d ) , len(ptrs) = %d , cols %s ", a_table_info.tbName, row_cnt, len(ptrs))
+			log.Fatal(err)
 		}
 		// ------------------------------------------------------------------
 		a_dta_chunk.rows[row_cnt] = &a_simple_row
@@ -1228,8 +1224,6 @@ type cacheTableChunkReader struct {
 	equality_query         string
 	interval_prepared_stmt *sql.Stmt
 	equality_prepared_stmt *sql.Stmt
-	a_sql_row              []sql.NullString
-	ptrs                   []any
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1310,12 +1304,6 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 					log.Fatalf("can not prepare to read a chunk of one pk ( %s )\n%s", new_info.equality_query, p_err.Error())
 				}
 				// ------------------------------------------------------------------
-				new_info.a_sql_row = make([]sql.NullString, tableInfos[a_chunk.table_id].cntCols)
-				new_info.ptrs = make([]any, tableInfos[a_chunk.table_id].cntCols)
-				for i := 0; i < tableInfos[a_chunk.table_id].cntCols; i++ {
-					new_info.ptrs[i] = &new_info.a_sql_row[i]
-				}
-				// ------------------------------------------------------------------
 				tabReadingVars[empty_slot] = &new_info
 				last_table = &new_info
 			} else {
@@ -1355,7 +1343,7 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 			log.Printf("ind lo: %s  ind up: %s", last_table.indices_lo_pk, last_table.indices_up_pk)
 		}
 		// --------------------------------------------------------------------------
-		ChunkReaderDumpProcess(id, q_rows, &last_table.a_sql_row, &tableInfos[last_table.table_id], last_table.table_id, a_chunk.chunk_id, &last_table.ptrs, insert_size, chan2generator)
+		ChunkReaderDumpProcess(id, q_rows, &tableInfos[last_table.table_id], last_table.table_id, a_chunk.chunk_id, insert_size, chan2generator)
 		// --------------------------------------------------------------------------
 		if mode_debug {
 			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\n", last_table.fullname, *the_query, len(sql_vals_pk), sql_vals_pk)
@@ -1604,6 +1592,49 @@ stringLoop:
 	return &n_str, len(n_str)
 }
 
+var quote_csv_string = [256]uint8{
+	//    1    2    3    4    5    6    7    8    9    A    B    C    D    E    F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'n', ' ', ' ', ' ', ' ', ' ', // 0x00-0x0F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x10-0x1F
+	' ', ' ', '"', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ',', ' ', ' ', ' ', // 0x20-0x2F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x30-0x3F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x40-0x4F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x50-0x5F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x60-0x6F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x70-0x7F
+	//    1    2    3    4     5    6    7    8    9    A    B   C    D    E    F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x80-0x8F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x90-0x9F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xA0-0xAF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xB0-0xBF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xC0-0xCF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xD0-0xDF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xE0-0xEF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xF0-0xFF
+}
+
+func needQuoteForCsv(s_ptr *string) bool {
+	s_len := len(*s_ptr)
+	if s_len == 0 {
+		return false
+	}
+	b_pos := 0
+	var new_char byte
+	for {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_csv_string[first_char]
+		if new_char == ' ' {
+			b_pos++
+			if b_pos == s_len {
+				return false
+			}
+		} else {
+			break
+		}
+	}
+	return true
+}
+
 // ------------------------------------------------------------------------------------------
 type cachedataChunkGenerator struct {
 	table_id     int
@@ -1762,7 +1793,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				if lastTable.tab_meta.columnInfos[n].isKindBinary {
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						if cell.kind == -1 {
+						if !cell.Valid {
 							lastTable.buf_arr[arr_ind].kind = -1
 							b_siz += 4
 							arr_ind -= arr_ind_inc
@@ -1770,7 +1801,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						}
 						var s_ptr *string
 						var cell_size int
-						s_ptr, cell_size = quoteBinary(cell.val)
+						s_ptr, cell_size = quoteBinary(&cell.String)
 						lastTable.buf_arr[arr_ind].kind = 2
 						lastTable.buf_arr[arr_ind].val = s_ptr
 						b_siz += cell_size + 2 + 8
@@ -1779,7 +1810,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote {
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						if cell.kind == -1 {
+						if !cell.Valid {
 							lastTable.buf_arr[arr_ind].kind = -1
 							b_siz += 4
 							arr_ind -= arr_ind_inc
@@ -1789,9 +1820,9 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						var need_quote int
 						var new_char byte
 						var cell_size int
-						s_ptr, cell_size, need_quote, new_char = needCopyForquoteString(cell.val)
+						s_ptr, cell_size, need_quote, new_char = needCopyForquoteString(&cell.String)
 						if need_quote != -1 {
-							s_ptr, cell_size = quoteStringFromPos(cell.val, cell_size, need_quote, new_char)
+							s_ptr, cell_size = quoteStringFromPos(&cell.String, cell_size, need_quote, new_char)
 						}
 						b_siz += cell_size + 2
 						lastTable.buf_arr[arr_ind].kind = 1
@@ -1805,14 +1836,14 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 					}
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						if cell.kind == -1 {
+						if !cell.Valid {
 							lastTable.buf_arr[arr_ind].kind = -1
 							b_siz += 4
 							arr_ind -= arr_ind_inc
 							continue
 						}
 						f := new(big.Float).SetPrec(f_prec)
-						f.SetString(*cell.val)
+						f.SetString(cell.String)
 						v := f.Text('f', -1)
 						b_siz += len(v)
 						lastTable.buf_arr[arr_ind].kind = 0
@@ -1822,15 +1853,15 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				} else {
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
-						if cell.kind == -1 {
+						if !cell.Valid {
 							lastTable.buf_arr[arr_ind].kind = -1
 							b_siz += 4
 							arr_ind -= arr_ind_inc
 							continue
 						}
 						lastTable.buf_arr[arr_ind].kind = 0
-						lastTable.buf_arr[arr_ind].val = cell.val
-						b_siz += len(*cell.val)
+						lastTable.buf_arr[arr_ind].val = &cell.String
+						b_siz += len(cell.String)
 						arr_ind -= arr_ind_inc
 					}
 				}
@@ -1932,10 +1963,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				// -------------------------------------------------
 				if tab_meta.columnInfos[n].haveFract {
 					for j := 0; j < a_dta_chunk.usedlen; j++ {
-						if a_dta_chunk.rows[j].cols[n].kind == -1 {
+						if !a_dta_chunk.rows[j].cols[n].Valid {
 							buf_arr[b_ind] = &emptStr
 						} else {
-							timeSec, timeFract, dotFound := strings.Cut(*a_dta_chunk.rows[j].cols[n].val, ".")
+							timeSec, timeFract, dotFound := strings.Cut(a_dta_chunk.rows[j].cols[n].String, ".")
 							if dotFound {
 								timeFract = strings.TrimRight(timeFract, "0")
 								if len(timeFract) == 1 {
@@ -1944,7 +1975,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 								a_str := timeSec + "." + timeFract
 								buf_arr[b_ind] = &a_str
 							} else {
-								buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
+								buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
 							}
 							b_siz += len(*buf_arr[b_ind])
 						}
@@ -1952,15 +1983,15 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 					}
 				} else if tab_meta.columnInfos[n].mustBeQuote && (tab_meta.columnInfos[n].isKindChar || tab_meta.columnInfos[n].isKindBinary) {
 					for j := 0; j < a_dta_chunk.usedlen; j++ {
-						if a_dta_chunk.rows[j].cols[n].kind == -1 {
+						if !a_dta_chunk.rows[j].cols[n].Valid {
 							buf_arr[b_ind] = &nullStr
 							b_siz += 2
 						} else {
-							if strings.ContainsAny(*a_dta_chunk.rows[j].cols[n].val, "\n,\"") {
-								a_str := "\"" + strings.ReplaceAll(*a_dta_chunk.rows[j].cols[n].val, "\"", "\"\"") + "\""
+							if needQuoteForCsv(&a_dta_chunk.rows[j].cols[n].String) {
+								a_str := "\"" + strings.ReplaceAll(a_dta_chunk.rows[j].cols[n].String, "\"", "\"\"") + "\""
 								buf_arr[b_ind] = &a_str
 							} else {
-								buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
+								buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
 							}
 							b_siz += len(*buf_arr[b_ind])
 						}
@@ -1968,10 +1999,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 					}
 				} else {
 					for j := 0; j < a_dta_chunk.usedlen; j++ {
-						if a_dta_chunk.rows[j].cols[n].kind == -1 {
+						if !a_dta_chunk.rows[j].cols[n].Valid {
 							buf_arr[b_ind] = &emptStr
 						} else {
-							buf_arr[b_ind] = a_dta_chunk.rows[j].cols[n].val
+							buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
 							b_siz += len(*buf_arr[b_ind])
 						}
 						b_ind += b_ind_inc
@@ -2034,12 +2065,14 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 			fname = strings.ReplaceAll(fname, "%z", "")
 		}
 		fname = dumpdir + strings.ReplaceAll(fname, "%%", "%")
-		fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-		if err != nil {
-			log.Printf("can not openfile %s", fname)
-			log.Fatal(err.Error())
-		} else {
-			fh.Close()
+		if dumpmode != "nul" {
+			fh, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			if err != nil {
+				log.Printf("can not openfile %s", fname)
+				log.Fatal(err.Error())
+			} else {
+				fh.Close()
+			}
 		}
 		file_is_empty = append(file_is_empty, true)
 		file_name = append(file_name, fname)
