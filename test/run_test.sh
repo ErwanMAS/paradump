@@ -55,9 +55,9 @@ LIST_TABLES_CSV="${LIST_SET_2} ${LIST_SET_3}"
 truncate_tables() {
     for T in $LIST_TABLES
     do
-	${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1 &
+	${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1 &
 	${DCK_MYSQL}  -u foobar -ptest1234 --port 4000 -h 127.0.0.1 barfoo -e "truncate table $T ;" >/dev/null 2>&1 &
-	${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
+	${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	${DCK_MYSQL}  -u foobar -ptest1234 --port 4000 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
     done
     wait
@@ -68,7 +68,7 @@ echo "Init   0:"
 truncate_tables
 
 echo "Check  0:"
-for port in 5000 4000
+for port in 4900 4000
 do
     echo
     for T in $LIST_TABLES
@@ -237,16 +237,16 @@ echo "Test 100: ok ( $? )"
 
 # test 101  copy small tables sql => count rows in foobar
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 101: failure" ; exit 101 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -guessprimarykey --dumpmode cpy -dst-port=4900 -dst-user=foobar -dst-pwd=test1234      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 101: failure" ; exit 101 ; }
 FAIL=0
 for T in $LIST_SMALL_TABLES
 do
-    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_foobar_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4900 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_foobar_${T}.sql" 2>/dev/null
 done
 for T in $LIST_SMALL_TABLES
 do
@@ -279,16 +279,16 @@ echo "Test 101: ok ( $? )"
 
 # test 102  copy small tables sql => count rows in barfoo
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -dst-port 4000 -pwd test1234 -user foobar  -guessprimarykey -db barfoo -guessprimarykey --dumpmode cpy -port=5000 -dst-user=foobar -dst-pwd=test1234      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 102: failure" ; exit 102 ; }
+eval "$BINARY  -dst-port 4000 -pwd test1234 -user foobar  -guessprimarykey -db barfoo -guessprimarykey --dumpmode cpy -port=4900 -dst-user=foobar -dst-pwd=test1234      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 102: failure" ; exit 102 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
-    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 barfoo -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 barfoo -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact barfoo "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_barfoo_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4900 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact barfoo "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR}/mysqldump_barfoo_${T}.sql" 2>/dev/null
 done
 for T in $LIST_SMALL_TABLES
 do
@@ -476,22 +476,22 @@ echo "Test 122: ok ( $? )"
 rm -rf "$TMPDIR"
 
 # test 130  copy whole database sql => count rows in foobar
-eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=5000 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 130: failure" ; exit 130 ; }
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=4900 -dst-user=foobar -dst-pwd=test1234                     $DEBUG_CMD " || { echo "Test 130: failure" ; exit 130 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
-    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-CNT_TAG_MATCH_U8=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_u8 = hex(cast(convert(label using utf8mb4)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
+CNT_TAG_MATCH_U8=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_u8 = hex(cast(convert(label using utf8mb4)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+32))
 fi
-CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 5000 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
+CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  -u foobar -ptest1234 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_L1" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+1024))
@@ -503,7 +503,7 @@ fi
 echo "Test 130: ok ( $? )"
 
 # test 131  dump whole database csv => count lines
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_copy_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
+eval "$BINARY  -port 4900 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_copy_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -529,7 +529,7 @@ then
 fi
 echo "Test 131: ok ( $? )"
 # test 132  dump whole database sql => count lines and compare mysqldump from t121 and from copy db inserted by T130
-eval "$BINARY  -port 5000 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_copy_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 132: failure" ; exit 132 ; }
+eval "$BINARY  -port 4900 -pwd test1234 -user foobar  -guessprimarykey -db foobar -alltables -guessprimarykey --dumpmode sql -dumpfile '${TMPDIR_T121}/dump_%d_copy_%t_%p%m%z' --dumpinsert simple  --dumpheader=false -insertsize 1 $DEBUG_CMD " || {  echo "Test 132: failure" ; exit 132 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
@@ -545,7 +545,7 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 5000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_copy_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} -u foobar -ptest1234  --port 4900 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_copy_${T}.sql" 2>/dev/null
 done
 for T in $LIST_TABLES
 do

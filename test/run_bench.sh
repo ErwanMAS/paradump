@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 
 BINARY=../src/paradump
 DB_HOST="127.0.0.1"
-DB_PORTS="4000 5000"
+DB_PORTS="4000 4900"
 DCK_MYSQL="docker run --network=host -i mysql/mysql-server:8.0.32  /usr/bin/mysql"
 
 while [[ -n "$1" ]]

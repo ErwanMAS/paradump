@@ -61,7 +61,7 @@ echo creating docker database instances
 
 declare -a EXTRA_PARAMS
 
-for V in $SRC_DB=4000 $TGT_DB=5000
+for V in $SRC_DB=4000 $TGT_DB=4900
 do
     IMG=$( echo "$V"| cut -d= -f1)
     NAM=$( echo "$V"| cut -d= -f2)
@@ -88,7 +88,7 @@ do
 	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
 done
 echo creating database objects
-for V in $SRC_DB=4000 $TGT_DB=5000
+for V in $SRC_DB=4000 $TGT_DB=4900
 do
     IMG=$( echo "$V"| cut -d= -f1)
     NAM=$( echo "$V"| cut -d= -f2)
