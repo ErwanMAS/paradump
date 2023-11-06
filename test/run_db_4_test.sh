@@ -56,8 +56,9 @@ if [[ "$MEM_GB" -le 16 ]]
 then
     MYSQL_BUF="3G"
 fi
+DOCKER_ARCH=$( $NEED_SUDO docker version -f json| jq -jr '.Server|(.Os,"/",.Arch)' )
 
-echo creating docker database instances
+printf "creating docker database instances ( default docker arch is %s )\n" ${DOCKER_ARCH}
 
 declare -a EXTRA_PARAMS
 
@@ -82,7 +83,7 @@ do
     else
 	DCK_NET="--publish=$PRT:3306"
     fi
-    $NEED_SUDO docker run                            "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+    $NEED_SUDO docker run --platform=${DOCKER_ARCH}   "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
 	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8                                  ||
 	$NEED_SUDO docker run --platform=linux/amd64 "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
 	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
