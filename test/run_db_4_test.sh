@@ -18,8 +18,12 @@ TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
 SRC_PG="postgres:10.23-bullseye=postgres_source=3"
 TGT_PG="postgres:13.10-bullseye=postgres_target=4"
 
+ALL_INSTANCES="$SRC_DB $TGT_DB $SRC_PG $TGT_PG"
+
+ALL_INSTANCES_PORT="$SRC_PG=8000 $TGT_PG=8900 $SRC_DB=4000 $TGT_DB=4900"
+
 CNT_ERR=0
-for V in $SRC_DB $TGT_DB $SRC_PG $TGT_PG
+for V in $ALL_INSTANCES
 do
     NAM=$( echo "$V"| cut -d= -f2)
 
@@ -64,7 +68,7 @@ printf "creating docker database instances ( default docker arch is %s )\n" "${D
 
 declare -a EXTRA_PARAMS
 
-for V in $SRC_PG=6000 $TGT_PG=6900 $SRC_DB=4000 $TGT_DB=4900
+for V in $ALL_INSTANCES_PORT
 do
     IMG=$( echo "$V"| cut -d= -f1)
     NAM=$( echo "$V"| cut -d= -f2)
@@ -108,7 +112,7 @@ do
     fi
 done
 echo creating database objects
-for V in $SRC_PG=6000 $TGT_PG=6900 $SRC_DB=4000 $TGT_DB=4900
+for V in $ALL_INSTANCES_PORT
 do
     IMG=$( echo "$V"| cut -d= -f1)
     NAM=$( echo "$V"| cut -d= -f2)

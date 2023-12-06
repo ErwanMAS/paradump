@@ -1,6 +1,6 @@
 CREATE TABLE client_activity (
   clientid bigint NOT NULL,
-  ticketid bigint NOT NULL,
+  ticketid decimal(20) NOT NULL,
   state int NOT NULL,
   modified timestamptz NULL DEFAULT NULL,
   border smallint   DEFAULT '0',

@@ -2,9 +2,9 @@
 
 create table sensors_pairing (
        clientid           bigint NOT NULL ,
-       sensorid           bigint NOT NULL ,
-       pairing_code       bigint NULL ,
-       activated_features bigint NOT NULL ,
+       sensorid           decimal(20) NOT NULL ,
+       pairing_code       decimal(20) NULL ,
+       activated_features decimal(20) NOT NULL ,
        pairing_time timestamp NOT NULL ,
        PRIMARY KEY (sensorid,clientid)
 )    ;

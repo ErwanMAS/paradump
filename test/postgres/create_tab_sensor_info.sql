@@ -1,6 +1,6 @@
 
 create table sensor_info (
-       id                bigint NOT NULL ,
+       id                decimal(20) NOT NULL ,
        model             int  NOT NULL ,
        hardware_id       varchar(24) ,
        mfg_date          timestamp NOT NULL ,

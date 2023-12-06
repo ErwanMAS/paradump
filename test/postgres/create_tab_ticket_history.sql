@@ -1,5 +1,5 @@
 CREATE TABLE ticket_history (
-  ticketid bigint NOT NULL,
+  ticketid decimal(20) NOT NULL,
   state int NOT NULL,
   modified timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   topic varchar(32) DEFAULT NULL,
