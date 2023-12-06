@@ -15,9 +15,11 @@ docker ps -a -q >/dev/null 2>&1 || {
 
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
 TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
+SRC_PG="postgres:10.23-bullseye=postgres_source=3"
+TGT_PG="postgres:13.10-bullseye=postgres_target=4"
 
 CNT_ERR=0
-for V in $SRC_DB $TGT_DB
+for V in $SRC_DB $TGT_DB $SRC_PG $TGT_PG
 do
     NAM=$( echo "$V"| cut -d= -f2)
 
@@ -43,14 +45,14 @@ else
     MEM_GB=$(( ( ( $( sysctl hw.memsize | sed 's/^hw.memsize: \([0-9][0-9]*\)$/\1/' ) / 1024 ) / 1024 ) / 1024 ))
 fi
 
-MYSQL_BUF="25G"
+MYSQL_BUF="18G"
 if [[ "$MEM_GB" -le 64 ]]
 then
-    MYSQL_BUF="15G"
+    MYSQL_BUF="12G"
 fi
 if [[ "$MEM_GB" -le 32 ]]
 then
-    MYSQL_BUF="7G"
+    MYSQL_BUF="6G"
 fi
 if [[ "$MEM_GB" -le 16 ]]
 then
@@ -62,80 +64,121 @@ printf "creating docker database instances ( default docker arch is %s )\n" "${D
 
 declare -a EXTRA_PARAMS
 
-for V in $SRC_DB=4000 $TGT_DB=4900
+for V in $SRC_PG=6000 $TGT_PG=6900 $SRC_DB=4000 $TGT_DB=4900
 do
     IMG=$( echo "$V"| cut -d= -f1)
     NAM=$( echo "$V"| cut -d= -f2)
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
-    if [[ "$PRT" -eq 4000 ]]
+    SFT=$( echo "$NAM"|cut -d_ -f1)
+    if [[ "$SFT" = "mysql" ]]
     then
-	EXTRA_PARAMS[0]="--innodb_adaptive_hash_index_partitions=8"
-    else
-	EXTRA_PARAMS[0]="--innodb_adaptive_hash_index_parts=8"
-	EXTRA_PARAMS[1]="--default-time-zone=America/New_York"
+	if [[ "$PRT" -eq 4000 ]]
+	then
+	    EXTRA_PARAMS[0]="--innodb_adaptive_hash_index_partitions=8"
+	else
+	    EXTRA_PARAMS[0]="--innodb_adaptive_hash_index_parts=8"
+	    EXTRA_PARAMS[1]="--default-time-zone=America/New_York"
+	fi
+        LOCAL_PORT=3306
+    fi
+    if [[ "$SFT" = "postgres" ]]
+    then
+	LOCAL_PORT=5432
     fi
     if [[ "$(uname -s)" != "Darwin"  ]]
     then
 	DCK_NET="--net=host"
 	EXTRA_PARAMS+=("--port=${PRT}")
     else
-	DCK_NET="--publish=$PRT:3306"
+	DCK_NET="--publish=$PRT:${LOCAL_PORT}"
     fi
-    $NEED_SUDO docker run --platform="${DOCKER_ARCH}"   "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
-	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8                                  ||
-	$NEED_SUDO docker run --platform=linux/amd64 "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
-	       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
+    if [[ "$SFT" = "mysql" ]]
+    then
+	$NEED_SUDO docker run --platform="${DOCKER_ARCH}"   "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+		       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8                                  ||
+	    $NEED_SUDO docker run --platform=linux/amd64    "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=test1234 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=test1234 -d "${IMG}" mysqld  --server-id="${SID}"  \
+		       --log-bin=/var/lib/mysql/mysql-bin.log  --binlog-format=ROW --innodb_buffer_pool_size="${MYSQL_BUF}" --max_connections=600 "${EXTRA_PARAMS[@]}" --innodb_buffer_pool_instances=8
+    fi
+    if [[ "$SFT" = "postgres" ]]
+    then
+	$NEED_SUDO docker run --platform="${DOCKER_ARCH}"    "$DCK_NET" --name "${NAM}" -e POSTGRES_PASSWORD=test1234 -e POSTGRES_DB=paradump -e POSTGRES_USER=admin -d "${IMG}" ||
+	    $NEED_SUDO docker run --platform=linux/amd64     "$DCK_NET" --name "${NAM}" -e POSTGRES_PASSWORD=test1234 -e POSTGRES_DB=paradump -e POSTGRES_USER=admin -d "${IMG}"
+    fi
 done
 echo creating database objects
-for V in $SRC_DB=4000 $TGT_DB=4900
+for V in $SRC_PG=6000 $TGT_PG=6900 $SRC_DB=4000 $TGT_DB=4900
 do
     IMG=$( echo "$V"| cut -d= -f1)
     NAM=$( echo "$V"| cut -d= -f2)
     SID=$( echo "$V"| cut -d= -f3)
     PRT=$( echo "$V"| cut -d= -f4)
 
+    SFT=$( echo "$NAM"|cut -d_ -f1)
+    
     T=60
     C=3
     while [[ $C -gt 0 ]]
     do
-	while [[ "$( $NEED_SUDO docker exec -i "${NAM}"  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' )" -eq 0 && "$T" -gt 0 ]]
+	READY_DB=0
+	while [[ "${READY_DB}" -eq 0 && "$T" -gt 0 ]]
 	do
+	    if [[ "$SFT" = "mysql" ]]
+	    then
+		READY_DB=$( $NEED_SUDO docker exec -i "${NAM}"  mysqladmin -h localhost -u root -ptest1234 ping 2>&1 | grep -c 'mysqld is alive' )
+	    fi
+	    if [[ "$SFT" = "postgres" ]]
+	    then
+		READY_DB=$( $NEED_SUDO docker exec -i "${NAM}"  pg_isready  -h localhost -U admin -d paradump >/dev/null 2>&1 && echo 1 || echo 0 )
+	    fi
 	    sleep 2
 	    T=$(( T - 1 ))
 	done
 	C=$(( C -1 ))
     done
-    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%'; create table test.paradumplock ( val_int int , val_str varchar(256) ) ENGINE=INNODB ; \"  "
-    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%'; \"  "
-    [ "$PRT" -ne 4000 ] && $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create user 'root'@'%' identified by 'test1234' ; \"  "
-    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT all privileges on *.* TO 'root'@'%' ; \"  "
-    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
-    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
-    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
-    for DB in foobar barfoo test
-    do
-	for F in create_tab_*.sql
+    printf "container %s listen on %s is READY\n" "$NAM" "$PRT"
+    if [[ "$SFT" = "mysql" ]]
+    then
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%'; \"  "
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%'; \"  "
+	[ "$PRT" -ne 4000 ] && $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create user 'root'@'%' identified by 'test1234' ; \"  "
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT all privileges on *.* TO 'root'@'%' ; \"  "
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
+	$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
+    fi
+    if [[ "$SFT" = "postgres" ]]
+    then
+	for DB in foobar barfoo test
 	do
-	    (
-		echo "run $F in $DB"
-		$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
-	    ) | tail -100 &
+	    $NEED_SUDO docker exec -i "${NAM}"  psql   -h localhost -U admin -d paradump -c " create schema $DB ; "
 	done
-    done
-    wait
-    for DB in foobar barfoo test
+    fi
+    for KIND in tab viw
     do
-	for F in create_viw_*.sql
+	for DB in foobar barfoo test
 	do
-	    (
-		echo "run $F in $DB"
-		$NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
-	    ) | tail -100 &
+	    for F in "${SFT}/create_${KIND}_"*.sql
+	    do
+		if [ -f "$F" ]
+		then
+		    (
+			echo "run $F in $DB"
+			if [[ "$SFT" = "mysql" ]]
+			then
+			    $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i "${NAM}"  sh -c '/usr/bin/mysql  -u foobar -h localhost '${DB} < "$F"
+			fi
+			if [[ "$SFT" = "postgres" ]]
+			then
+			    $NEED_SUDO docker exec  -e PGOPTIONS="-c search_path=$DB" -i "${NAM}"   psql   -h localhost -U admin -d paradump  < "$F"
+			fi
+		    ) 2>&1 | tail -100 &
+		fi
+	    done
 	done
+	wait
     done
-    wait
 done
 echo "loading data"
 for DB in foobar barfoo
