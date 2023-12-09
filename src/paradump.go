@@ -41,7 +41,7 @@ import (
 
    go build   -ldflags "-s -w" -v paradump.go
 
-   ./paradump  -host 127.0.0.1 -db foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info
+   ./paradump  -host 127.0.0.1 -schema foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info
 
    ------------------------------------------------------------------------------------------ */
 
@@ -2340,8 +2340,8 @@ func main() {
 	arg_dumpcompress_level := flag.Int("dumpcompresslevel", 1, "which zstd compression level ( 1 , 3 , 6 , 11 ) ")
 	arg_dumpcompress_concur := flag.Int("dumpcompressconcur", 4, "which zstd compression concurency ")
 	// ------------
-	var arg_dbs arrayFlags
-	flag.Var(&arg_dbs, "db", "database(s) of tables to dump")
+	var arg_schemas arrayFlags
+	flag.Var(&arg_schemas, "schema", "schema(s) of tables to dump")
 	// ------------
 	var arg_tables2dump arrayFlags
 	flag.Var(&arg_tables2dump, "table", "table to dump")
@@ -2379,13 +2379,13 @@ func main() {
 		flag.Usage()
 		os.Exit(3)
 	}
-	if arg_dbs == nil {
-		log.Printf("no database specified")
+	if arg_schemas == nil {
+		log.Printf("no schema specified")
 		flag.Usage()
 		os.Exit(4)
 	}
-	if len(arg_dbs) > 1 && arg_tables2dump != nil {
-		log.Printf("can not specify multiple databases with a list of tables")
+	if len(arg_schemas) > 1 && arg_tables2dump != nil {
+		log.Printf("can not specify multiple schemas with a list of tables")
 		flag.Usage()
 		os.Exit(5)
 	}
@@ -2464,17 +2464,17 @@ func main() {
 	var conDst []sql.Conn
 	var dbSrc *sql.DB
 	var dbDst *sql.DB
-	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_dbs[0])
+	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
 	if *arg_dumpmode == "cpy" {
-		dbDst, conDst, _ = GetDstConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_dbs[0])
+		dbDst, conDst, _ = GetDstConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_schemas[0])
 	}
 	// ----------------------------------------------------------------------------------
 	var tables2dump []aTable
 	if arg_tables2dump == nil {
-		tables2dump = GetListTables(conSrc[0], arg_dbs, arg_tables2exclude)
+		tables2dump = GetListTables(conSrc[0], arg_schemas, arg_tables2exclude)
 	} else {
 		for _, t := range arg_tables2dump {
-			tables2dump = append(tables2dump, aTable{dbName: arg_dbs[0], tbName: t})
+			tables2dump = append(tables2dump, aTable{dbName: arg_schemas[0], tbName: t})
 		}
 	}
 	if mode_debug {
