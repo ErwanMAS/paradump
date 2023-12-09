@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"reflect"
+	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -41,7 +42,7 @@ import (
 
    go build   -ldflags "-s -w" -v paradump.go
 
-   ./paradump  -host 127.0.0.1 -schema foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info
+   ./paradump -bypass_check_compiler  -host 127.0.0.1 -schema foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info -dumpfile /dev/null
 
    ------------------------------------------------------------------------------------------ */
 
@@ -2358,6 +2359,11 @@ func main() {
 	arg_dst_db_pasw := flag.String("dst-pwd", "", "the database connection password")
 	arg_dst_db_parr := flag.Int("dst-parallel", 20, "number of workers")
 	// ------------
+	//
+	// bug with 1.21 need more times to investigate
+	//
+	arg_bypass_check_compiler := flag.Bool("bypass_check_compiler", false, "bypass compiler check")
+	// ------------
 	flag.Parse()
 	// ------------
 	if len(flag.Args()) > 0 {
@@ -2367,6 +2373,11 @@ func main() {
 		}
 		flag.Usage()
 		os.Exit(11)
+	}
+	// ----------------------------------------------------------------------------------
+	if runtime.Version() > "go1.20" && !*arg_bypass_check_compiler {
+		log.Printf("this must be compiled with go1.20")
+		os.Exit(99)
 	}
 	// ----------------------------------------------------------------------------------
 	if arg_tables2dump == nil && !*arg_all_tables {
