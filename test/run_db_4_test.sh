@@ -185,20 +185,48 @@ do
     done
 done
 echo "loading data"
-for DB in foobar barfoo
+for ENGINE in mysql postgres
 do
-    for D in init_*.sql.zst
+    for DB in foobar barfoo
     do
-	(
-	    echo "loading  $D  on DB $DB"
-	    if [[ $DB = "barfoo" ]]
-	    then
-		CONTAINER_DST=mysql_target
-	    else
-		CONTAINER_DST=mysql_source
-	    fi
-	    ( time zstd -dc "${D}" | $NEED_SUDO docker exec  -e MYSQL_PWD=test1234 -i  $CONTAINER_DST sh -c "/usr/bin/mysql  -u foobar  -h localhost ${DB} "  ) 2>&1
-	) | tail -100 &
+	if [[ "$ENGINE" = "mysql" ]]
+	then
+	    ENV_CMD="MYSQL_PWD=test1234"
+	    CNT_EXE="/usr/bin/mysql  -u foobar  -h localhost ${DB} "
+	fi
+	if [[ "$ENGINE" = "postgres" ]]
+	then
+	    ENV_CMD="PGOPTIONS=-c search_path=$DB"
+	    CNT_EXE="psql   -h localhost -U admin -d paradump"
+	fi
+	for D in init_*.sql.zst
+	do
+	    # shellcheck disable=SC2001
+	    TAB=$( echo "$D" | sed 's|^init_\(.*\).sql.zst|\1|p;d' )
+	    (
+		echo "loading  $D ( aka table $TAB ) in DB $DB for $ENGINE"
+		if [[ $DB = "barfoo" ]]
+		then
+		    CONTAINER_DST=${ENGINE}_target
+		else
+		    CONTAINER_DST=${ENGINE}_source
+		fi
+		if [[ $TAB = "ticket_tag" && "$ENGINE" = "postgres" ]]
+		then
+		    # shellcheck disable=SC2086,SC2016
+		    ( time zstd -dc "${D}" | sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' | sed "s|\([^\\]\)\\\\'|\1''|g" | sed 's|\([^\\]\)\\"|\1"|g' | sed -e 's|\\\\|\\|g' |  $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+		else
+		    if [[ $TAB = "account_metadatas" && "$ENGINE" = "postgres" ]]
+		    then
+			# shellcheck disable=SC2086,SC2016
+			( time zstd -dc "${D}" | sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' | sed "s|,0x\([0-9A-F][0-9A-F]*\),|,decode('\1','hex'),|g" |                       $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+		    else
+			# shellcheck disable=SC2086,SC2016
+			( time zstd -dc "${D}" | sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' |                                                                                  $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+		    fi
+		fi
+	    ) | tail -500 &
+	done
     done
 done
 wait
@@ -235,4 +263,56 @@ do
 done
 wait
 echo "done"
-
+#
+CMP_FILE=$(mktemp) 
+(
+for ENGINE in mysql postgres
+do
+    for DB in foobar barfoo
+    do
+	if [[ "$ENGINE" = "mysql" ]]
+	then
+	    ENV_CMD="MYSQL_PWD=test1234"
+	    CNT_EXE="/usr/bin/mysql  -u foobar  -h localhost ${DB} "
+	fi
+	if [[ "$ENGINE" = "postgres" ]]
+	then
+	    ENV_CMD="PGOPTIONS=-c search_path=$DB"
+	    CNT_EXE="psql -qAt -F, -h localhost -U admin -d paradump"
+	fi
+	if [[ $DB = "barfoo" ]]
+   	then
+	    CONTAINER_DST=${ENGINE}_target
+	else
+	    CONTAINER_DST=${ENGINE}_source
+	fi
+	for D in init_*.sql.zst
+	do
+	    # shellcheck disable=SC2001
+	    TAB=$( echo "$D" | sed 's|^init_\(.*\).sql.zst|\1|p;d' )
+	    # shellcheck disable=SC2086
+	    ( ( echo "select 'CHECK_COUNT = 'as REM , '$TAB' as T , '=' as A , '$ENGINE' as ENGINE , '=' as B , '$DB' as D , '=' as C , count(*) as CNT from $TAB;" | docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1 | tail -500 ) & 
+	done
+    done
+done
+wait
+) | sed 's|,||g;s|\t||g;s| ||g;' | grep ^CHEC | sort > "$CMP_FILE"
+#
+O_T=""
+O_C="-1"
+while read -r L
+do
+    T=$( echo "$L" | cut -d= -f 2)
+    C=$( echo "$L" | cut -d= -f 5)
+    if [[ "$T" == "$O_T"  ]]
+    then
+	if [[ $C -ne $O_C ]]
+	then
+	    echo BUG import with "$L"
+	fi
+    else
+	O_T=$T
+	O_C=$C
+    fi
+done < "$CMP_FILE"
+#
