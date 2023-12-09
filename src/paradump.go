@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"os"
 	"reflect"
-	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -42,7 +41,7 @@ import (
 
    go build   -ldflags "-s -w" -v paradump.go
 
-   ./paradump -bypass_check_compiler  -host 127.0.0.1 -schema foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info -dumpfile /dev/null
+   ./paradump  -host 127.0.0.1 -schema foobar -port 4000 -user foobar -pwd test1234 -table client_activity -table client_info -dumpfile /dev/null
 
    ------------------------------------------------------------------------------------------ */
 
@@ -236,7 +235,7 @@ func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *s
 }
 
 // ------------------------------------------------------------------------------------------
-func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []sql.Conn, StatSqlSession, error) {
+func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, StatSqlSession, error) {
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
 	if err != nil {
 		log.Print("can not create a mysql object")
@@ -328,11 +327,11 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 		log.Fatal(" we choose a session that have a different position than the first session ")
 	}
 	// --------------------
-	var ret_dbconns []sql.Conn
+	var ret_dbconns []*sql.Conn
 	if foundRefPos >= 0 {
 		for i := 0; i < TargetCount*3-1; i++ {
 			if db_sessions_filepos[i].Position.Name == stats_ses[foundRefPos].FileName && db_sessions_filepos[i].Position.Pos == stats_ses[foundRefPos].FilePos && len(ret_dbconns) < TargetCount {
-				ret_dbconns = append(ret_dbconns, *db_conns[db_sessions_filepos[i].cnxId])
+				ret_dbconns = append(ret_dbconns, db_conns[db_sessions_filepos[i].cnxId])
 				db_conns[db_sessions_filepos[i].cnxId] = nil
 			}
 		}
@@ -347,7 +346,7 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 }
 
 // ------------------------------------------------------------------------------------------
-func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []sql.Conn, error) {
+func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, error) {
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
 	if err != nil {
 		log.Print("can not create a mysql object")
@@ -359,14 +358,14 @@ func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassw
 	var ctx context.Context
 	ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
 	// --------------------
-	db_conns := make([]sql.Conn, TargetCount)
+	db_conns := make([]*sql.Conn, TargetCount)
 	for i := 0; i < TargetCount; i++ {
 		first_conn, err := db.Conn(ctx)
 		if err != nil {
 			log.Print("can not open a mysql connection")
 			log.Fatal(err.Error())
 		}
-		db_conns[i] = *first_conn
+		db_conns[i] = first_conn
 		ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
 		_, e_err := db_conns[i].ExecContext(ctx, "SET NAMES utf8mb4 COLLATE utf8mb4_general_ci")
 		if e_err != nil {
@@ -440,7 +439,7 @@ type MetadataTable struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func GetBasicMetadataInfo(adbConn sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
+func GetBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
 	var result MetadataTable
 	result.dbName = dbName
 	result.tbName = tableName
@@ -560,7 +559,7 @@ func GetBasicMetadataInfo(adbConn sql.Conn, dbName string, tableName string) (Me
 }
 
 // ------------------------------------------------------------------------------------------
-func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string) (MetadataTable, bool) {
+func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string) (MetadataTable, bool) {
 	result, _ := GetBasicMetadataInfo(adbConn, dbName, tableName)
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
@@ -739,7 +738,7 @@ func GetTableMetadataInfo(adbConn sql.Conn, dbName string, tableName string, gue
 }
 
 // ------------------------------------------------------------------------------------------
-func GetListTables(adbConn sql.Conn, dbNames []string, tab2exclude []string) []aTable {
+func GetListTables(adbConn *sql.Conn, dbNames []string, tab2exclude []string) []aTable {
 	var result []aTable
 	for _, v := range dbNames {
 		result = append(result, GetListTablesBySchema(adbConn, v, tab2exclude)[:]...)
@@ -748,7 +747,7 @@ func GetListTables(adbConn sql.Conn, dbNames []string, tab2exclude []string) []a
 }
 
 // ------------------------------------------------------------------------------------------
-func GetListTablesBySchema(adbConn sql.Conn, dbName string, tab2exclude []string) []aTable {
+func GetListTablesBySchema(adbConn *sql.Conn, dbName string, tab2exclude []string) []aTable {
 	var result []aTable
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
@@ -801,7 +800,7 @@ func GetListTablesBySchema(adbConn sql.Conn, dbName string, tab2exclude []string
 }
 
 // ------------------------------------------------------------------------------------------
-func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool, dumpmode string, dumpinsertwithcol string) ([]MetadataTable, bool) {
+func GetMetadataInfo4Tables(adbConn *sql.Conn, tableNames []aTable, guessPk bool, dumpmode string, dumpinsertwithcol string) ([]MetadataTable, bool) {
 	var result []MetadataTable
 	for j := 0; j < len(tableNames); j++ {
 		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk, dumpmode, dumpinsertwithcol)
@@ -845,7 +844,7 @@ func GetMetadataInfo4Tables(adbConn sql.Conn, tableNames []aTable, guessPk bool,
 }
 
 // ------------------------------------------------------------------------------------------
-func CheckTableOnDestination(adbConn sql.Conn, a_table MetadataTable) (string, bool) {
+func CheckTableOnDestination(adbConn *sql.Conn, a_table MetadataTable) (string, bool) {
 	dstinfo, _ := GetBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
 	res := reflect.DeepEqual(a_table.columnInfos, dstinfo.columnInfos)
 	err_msg := ""
@@ -862,7 +861,7 @@ func CheckTableOnDestination(adbConn sql.Conn, a_table MetadataTable) (string, b
 }
 
 // ------------------------------------------------------------------------------------------
-func CheckTablesOnDestination(adbConn sql.Conn, infTables []MetadataTable) {
+func CheckTablesOnDestination(adbConn *sql.Conn, infTables []MetadataTable) {
 	cnterr := 0
 	for n := range infTables {
 		msg, err := CheckTableOnDestination(adbConn, infTables[n])
@@ -1008,7 +1007,7 @@ func generateEqualityPredicat(pkeyCols []string, enumCols []string) (string, []i
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkBrowser(adbConn sql.Conn, id int, tableidstoscan chan int, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64) {
+func tableChunkBrowser(adbConn *sql.Conn, id int, tableidstoscan chan int, tableInfos []MetadataTable, chunk2read chan tablechunk, sizeofchunk_init int64) {
 	if mode_debug {
 		log.Printf("tableChunkBrowser [%02d] start\n", id)
 	}
@@ -1228,7 +1227,7 @@ type cacheTableChunkReader struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn sql.Conn, tableInfos []MetadataTable, id int, insert_size int, cntBrowser int) {
+func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn *sql.Conn, tableInfos []MetadataTable, id int, insert_size int, cntBrowser int) {
 	if mode_debug {
 		log.Printf("tableChunkReader[%02d] start with insert size %d\n", id, insert_size)
 	}
@@ -2273,7 +2272,7 @@ func tableFileWriter(sql2inject chan insertchunk, id int, tableInfos []MetadataT
 }
 
 // ------------------------------------------------------------------------------------------
-func tableCopyWriter(sql2inject chan insertchunk, adbConn sql.Conn, id int) {
+func tableCopyWriter(sql2inject chan insertchunk, adbConn *sql.Conn, id int) {
 	if mode_debug {
 		log.Printf("tableCopyWriter[%d] start\n", id)
 	}
@@ -2359,11 +2358,6 @@ func main() {
 	arg_dst_db_pasw := flag.String("dst-pwd", "", "the database connection password")
 	arg_dst_db_parr := flag.Int("dst-parallel", 20, "number of workers")
 	// ------------
-	//
-	// bug with 1.21 need more times to investigate
-	//
-	arg_bypass_check_compiler := flag.Bool("bypass_check_compiler", false, "bypass compiler check")
-	// ------------
 	flag.Parse()
 	// ------------
 	if len(flag.Args()) > 0 {
@@ -2373,11 +2367,6 @@ func main() {
 		}
 		flag.Usage()
 		os.Exit(11)
-	}
-	// ----------------------------------------------------------------------------------
-	if runtime.Version() > "go1.20" && !*arg_bypass_check_compiler {
-		log.Printf("this must be compiled with go1.20")
-		os.Exit(99)
 	}
 	// ----------------------------------------------------------------------------------
 	if arg_tables2dump == nil && !*arg_all_tables {
@@ -2471,8 +2460,8 @@ func main() {
 	var cntBrowser int = *arg_browser_parr
 	var cntReader int = *arg_db_parr
 	// ----------------------------------------------------------------------------------
-	var conSrc []sql.Conn
-	var conDst []sql.Conn
+	var conSrc []*sql.Conn
+	var conDst []*sql.Conn
 	var dbSrc *sql.DB
 	var dbDst *sql.DB
 	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
@@ -2545,7 +2534,7 @@ func main() {
 	// ------------
 	for j := 0; j < cntBrowser; j++ {
 		wg_brw.Add(1)
-		go func(adbConn sql.Conn, id int) {
+		go func(adbConn *sql.Conn, id int) {
 			defer wg_brw.Done()
 			tableChunkBrowser(adbConn, id, tables_to_browse, r, pk_chunks_to_read, int64(*arg_chunk_size))
 		}(conSrc[j], j)
@@ -2554,7 +2543,7 @@ func main() {
 	for j := 0; j < cntReader; j++ {
 		time.Sleep(10 * time.Millisecond)
 		wg_red.Add(1)
-		go func(adbConn sql.Conn, id int) {
+		go func(adbConn *sql.Conn, id int) {
 			defer wg_red.Done()
 			tableChunkReader(pk_chunks_to_read, sql_generator, adbConn, r, id, *arg_insert_size, cntBrowser)
 		}(conSrc[j+cntBrowser], j)
@@ -2577,7 +2566,7 @@ func main() {
 		writer_cnt = len(conDst)
 		for j := 0; j < writer_cnt; j++ {
 			wg_wrt.Add(1)
-			go func(adbConn sql.Conn, id int) {
+			go func(adbConn *sql.Conn, id int) {
 				defer wg_wrt.Done()
 				tableCopyWriter(sql_to_write, adbConn, id+len(conSrc))
 			}(conDst[j], j)
