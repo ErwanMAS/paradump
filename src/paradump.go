@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,8 @@ import (
 	"unicode/utf8"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -89,7 +92,7 @@ type InfoMysqlPosition struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn, myPos chan InfoMysqlPosition) {
+func MysqlLockTableWaitRelease(jobsync chan bool, conn *sql.Conn, myPos chan InfoMysqlPosition) {
 	var ret_val InfoMysqlPosition
 	// --------------------
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
@@ -140,19 +143,19 @@ func LockTableWaitRelease(jobsync chan bool, conn *sql.Conn, myPos chan InfoMysq
 }
 
 // ------------------------------------------------------------------------------------------
-type InfoSqlSession struct {
+type InfoMysqlSession struct {
 	Status   bool
 	cnxId    int
 	Position InfoMysqlPosition
 }
-type StatSqlSession struct {
+type StatMysqlSession struct {
 	Cnt      int
 	FileName string
 	FilePos  int
 }
 
-func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *sql.Conn, jobstart chan bool, jobsync chan int) {
-	var ret_val InfoSqlSession
+func MysqlLockTableStartConsistenRead(infoconn chan InfoMysqlSession, myId int, conn *sql.Conn, jobstart chan bool, jobsync chan int) {
+	var ret_val InfoMysqlSession
 	ret_val.Status = false
 	ret_val.cnxId = myId
 	// --------------------
@@ -235,7 +238,11 @@ func LockTableStartConsistenRead(infoconn chan InfoSqlSession, myId int, conn *s
 }
 
 // ------------------------------------------------------------------------------------------
-func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, StatSqlSession, error) {
+func GetaSynchronizedMysqlConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, StatMysqlSession, error) {
+	// db, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	// select pg_export_snapshot();
+	// set transaction snapshot ‘00000003-000021CE-1’;
+	// https://www.postgresql.org/docs/10/sql-set-transaction.html
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
 	if err != nil {
 		log.Print("can not create a mysql object")
@@ -259,12 +266,12 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	// --------------------------------------------------------------------------
 	globallockchan := make(chan bool)
 	globalposchan := make(chan InfoMysqlPosition)
-	resultreadchan := make(chan InfoSqlSession, TargetCount*3-1)
+	resultreadchan := make(chan InfoMysqlSession, TargetCount*3-1)
 	startreadchan := make(chan bool, TargetCount*3-1)
 	syncreadchan := make(chan int, TargetCount*3-1)
 	// -------------------------------------------
 	for i := 1; i < TargetCount*3; i++ {
-		go LockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan, syncreadchan)
+		go MysqlLockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan, syncreadchan)
 	}
 	// --------------------
 	// we wait for TargetCount*3-1  feedback - ready to start a transaction
@@ -274,7 +281,7 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	log.Print("everyone is ready")
 	// --------------------
 	// we start the read lock
-	go LockTableWaitRelease(globallockchan, db_conns[0], globalposchan)
+	go MysqlLockTableWaitRelease(globallockchan, db_conns[0], globalposchan)
 	<-globallockchan
 	log.Print("ok for global lock")
 	// --------------------
@@ -292,8 +299,8 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 	globallockchan <- true
 	log.Print("ok as for release the global lock")
 	// --------------------------------------------------------------------------
-	var stats_ses []StatSqlSession
-	db_sessions_filepos := make([]InfoSqlSession, TargetCount*3-1)
+	var stats_ses []StatMysqlSession
+	db_sessions_filepos := make([]InfoMysqlSession, TargetCount*3-1)
 	<-globallockchan
 	masterpos := <-globalposchan
 	for i := 1; i < TargetCount*3; i++ {
@@ -306,7 +313,7 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 			}
 		}
 		if foundidx == -1 {
-			stats_ses = append(stats_ses, StatSqlSession{Cnt: 1, FileName: db_sessions_filepos[i-1].Position.Name, FilePos: db_sessions_filepos[i-1].Position.Pos})
+			stats_ses = append(stats_ses, StatMysqlSession{Cnt: 1, FileName: db_sessions_filepos[i-1].Position.Name, FilePos: db_sessions_filepos[i-1].Position.Pos})
 		}
 	}
 	// --------------------
@@ -346,7 +353,8 @@ func GetaSynchronizedConnections(DbHost string, DbPort int, DbUsername string, D
 }
 
 // ------------------------------------------------------------------------------------------
-func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, error) {
+func GetDstMysqlConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, error) {
+	// db, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?maxAllowedPacket=0", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
 	if err != nil {
 		log.Print("can not create a mysql object")
@@ -383,9 +391,169 @@ func GetDstConnections(DbHost string, DbPort int, DbUsername string, DbUserPassw
 }
 
 // ------------------------------------------------------------------------------------------
+func GetaSynchronizedPostgresConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, StatMysqlSession, error) {
+	// db, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	// select pg_export_snapshot();
+	// set transaction snapshot ‘00000003-000021CE-1’;
+	// https://www.postgresql.org/docs/10/sql-set-transaction.html
+	db, err := sql.Open("pgx", fmt.Sprintf("postgres://%s@%s:%s:%d/%s?sslmode=disable", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
+	if err != nil {
+		log.Print("can not create a postgres object")
+		log.Fatal(err.Error())
+	}
+	db.SetMaxOpenConns(TargetCount * 3)
+	db.SetMaxIdleConns(TargetCount * 3)
+	// --------------------
+	var ctx context.Context
+	ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
+	// --------------------
+	db_conns := make([]*sql.Conn, TargetCount*3)
+	for i := 0; i < TargetCount*3; i++ {
+		first_conn, err := db.Conn(ctx)
+		if err != nil {
+			log.Print("can not open a mysql connection")
+			log.Fatal(err.Error())
+		}
+		db_conns[i] = first_conn
+	}
+	// --------------------------------------------------------------------------
+	globallockchan := make(chan bool)
+	globalposchan := make(chan InfoMysqlPosition)
+	resultreadchan := make(chan InfoMysqlSession, TargetCount*3-1)
+	startreadchan := make(chan bool, TargetCount*3-1)
+	syncreadchan := make(chan int, TargetCount*3-1)
+	// -------------------------------------------
+	for i := 1; i < TargetCount*3; i++ {
+		go MysqlLockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan, syncreadchan)
+	}
+	// --------------------
+	// we wait for TargetCount*3-1  feedback - ready to start a transaction
+	for i := 1; i < TargetCount*3; i++ {
+		<-syncreadchan
+	}
+	log.Print("everyone is ready")
+	// --------------------
+	// we start the read lock
+	go MysqlLockTableWaitRelease(globallockchan, db_conns[0], globalposchan)
+	<-globallockchan
+	log.Print("ok for global lock")
+	// --------------------
+	// we wake all read
+	for i := 1; i < TargetCount*3; i++ {
+		startreadchan <- true
+	}
+	// --------------------
+	// we wait for TargetCount*3-1  feedback - a read trasnsaction is started
+	for i := 1; i < TargetCount*3; i++ {
+		<-syncreadchan
+	}
+	// --------------------
+	// we release the global lock
+	globallockchan <- true
+	log.Print("ok as for release the global lock")
+	// --------------------------------------------------------------------------
+	var stats_ses []StatMysqlSession
+	db_sessions_filepos := make([]InfoMysqlSession, TargetCount*3-1)
+	<-globallockchan
+	masterpos := <-globalposchan
+	for i := 1; i < TargetCount*3; i++ {
+		db_sessions_filepos[i-1] = <-resultreadchan
+		foundidx := -1
+		for j := 0; j < len(stats_ses); j++ {
+			if foundidx == -1 && stats_ses[j].FileName == db_sessions_filepos[i-1].Position.Name && stats_ses[j].FilePos == db_sessions_filepos[i-1].Position.Pos {
+				stats_ses[j].Cnt++
+				foundidx = j
+			}
+		}
+		if foundidx == -1 {
+			stats_ses = append(stats_ses, StatMysqlSession{Cnt: 1, FileName: db_sessions_filepos[i-1].Position.Name, FilePos: db_sessions_filepos[i-1].Position.Pos})
+		}
+	}
+	// --------------------
+	log.Printf("we collected infos about %d sessions differents postions count is %d", len(db_sessions_filepos), len(stats_ses))
+	foundRefPos := -1
+	for j := 0; foundRefPos == -1 && j < len(stats_ses); j++ {
+		if stats_ses[j].Cnt >= TargetCount {
+			foundRefPos = j
+		}
+	}
+	// --------------------
+	log.Printf("we choose session with pos %s@%d", stats_ses[foundRefPos].FileName, stats_ses[foundRefPos].FilePos)
+	if mode_debug {
+		log.Printf("master position was %s@%d", masterpos.Name, masterpos.Pos)
+	}
+	// --------------------
+	if masterpos.Name != stats_ses[foundRefPos].FileName || stats_ses[foundRefPos].FilePos != masterpos.Pos {
+		log.Fatal(" we choose a session that have a different position than the first session ")
+	}
+	// --------------------
+	var ret_dbconns []*sql.Conn
+	if foundRefPos >= 0 {
+		for i := 0; i < TargetCount*3-1; i++ {
+			if db_sessions_filepos[i].Position.Name == stats_ses[foundRefPos].FileName && db_sessions_filepos[i].Position.Pos == stats_ses[foundRefPos].FilePos && len(ret_dbconns) < TargetCount {
+				ret_dbconns = append(ret_dbconns, db_conns[db_sessions_filepos[i].cnxId])
+				db_conns[db_sessions_filepos[i].cnxId] = nil
+			}
+		}
+	}
+	for i := 0; i < TargetCount*3; i++ {
+		if db_conns[i] != nil {
+			db_conns[i].Close()
+		}
+	}
+	// --------------------
+	return db, ret_dbconns, stats_ses[foundRefPos], nil
+}
+
+// ------------------------------------------------------------------------------------------
+func GetDstPostgresConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, error) {
+	// db, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	db, err := sql.Open("pgx", fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
+	if err != nil {
+		log.Print("can not create a postgres object")
+		log.Fatal(err.Error())
+	}
+	db.SetMaxOpenConns(TargetCount)
+	db.SetMaxIdleConns(TargetCount)
+	// --------------------
+	var ctx context.Context
+	ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
+	// --------------------
+	db_conns := make([]*sql.Conn, TargetCount)
+	for i := 0; i < TargetCount; i++ {
+		first_conn, err := db.Conn(ctx)
+		if err != nil {
+			log.Print("can not open a postgres connection")
+			log.Fatal(err.Error())
+		}
+		db_conns[i] = first_conn
+		ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
+		_, e_err := db_conns[i].ExecContext(ctx, "SET client_encoding = 'UTF8';")
+		if e_err != nil {
+			log.Fatalf("thread %d , can not set client_encoding for the session\n%s\n", i, e_err.Error())
+		}
+		ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
+		_, t_err := db_conns[i].ExecContext(ctx, "SET time zone 'UTC'; ")
+		if t_err != nil {
+			log.Fatalf("thread %d , can not set time zone for the session\n%s\n", i, t_err.Error())
+		}
+		ctx, _ = context.WithTimeout(context.Background(), 1*time.Second)
+		_, r_err := db_conns[i].ExecContext(ctx, "SET session_replication_role = replica; ")
+		if r_err != nil {
+			log.Fatalf("thread %d , can not set session_replication_role for the session\n%s\n", i, r_err.Error())
+		}
+	}
+	// --------------------
+	return db, db_conns, nil
+}
+
+// ------------------------------------------------------------------------------------------
 type columnInfo struct {
 	colName      string
 	colType      string
+	colSqlType   string
+	dtPrec       int
+	nuPrec       int
 	isNullable   bool
 	mustBeQuote  bool
 	haveFract    bool
@@ -439,7 +607,7 @@ type MetadataTable struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func GetBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
+func GetMysqlBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
 	var result MetadataTable
 	result.dbName = dbName
 	result.tbName = tableName
@@ -478,15 +646,14 @@ func GetBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (M
 	}
 	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
 
-	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ? order by ORDINAL_POSITION ", dbName, tableName)
+	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,IFNULL(DATETIME_PRECISION,-9999),IFNULL(NUMERIC_PRECISION,-9999),COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = ? AND table_name = ? order by ORDINAL_POSITION ", dbName, tableName)
 	if q_err != nil {
 		log.Fatalf("can not query information_schema.columns for %s.%s\n%s", dbName, tableName, q_err.Error())
 	}
 	for q_rows.Next() {
 		var a_col columnInfo
 		var a_str string
-		var a_int int
-		err := q_rows.Scan(&a_col.colName, &a_col.colType, &a_str, &a_int)
+		err := q_rows.Scan(&a_col.colName, &a_col.colType, &a_str, &a_col.dtPrec, &a_col.nuPrec, &a_col.colSqlType)
 		if err != nil {
 			log.Print("can not scan columns informations")
 			log.Fatal(err.Error())
@@ -496,7 +663,7 @@ func GetBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (M
 		a_col.isKindBinary = (a_col.colType == "varbinary" || a_col.colType == "binary" || a_col.colType == "tinyblob" || a_col.colType == "blob" || a_col.colType == "longblob" || a_col.colType == "bit")
 		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
 		a_col.isKindFloat = (a_col.colType == "float" || a_col.colType == "double")
-		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_int > 0)
+		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_col.dtPrec > 0)
 		result.columnInfos = append(result.columnInfos, a_col)
 	}
 
@@ -559,8 +726,125 @@ func GetBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (M
 }
 
 // ------------------------------------------------------------------------------------------
-func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string) (MetadataTable, bool) {
-	result, _ := GetBasicMetadataInfo(adbConn, dbName, tableName)
+func GetPostgresBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
+	var result MetadataTable
+	result.dbName = dbName
+	result.tbName = tableName
+	result.fakePrimaryKey = false
+	result.onError = 0
+	result.isEmpty = true
+	result.withTrigger = false
+
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	p_err := adbConn.PingContext(ctx)
+	if p_err != nil {
+		log.Fatalf("can not ping\n%s", p_err.Error())
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows, q_err := adbConn.QueryContext(ctx, "select coalesce(pg_total_relation_size(c.oid),-1),coalesce(c.reltuples::bigint,-1),'UNKNOW',TABLE_TYPE from information_schema.tables is_t left join pg_class c on c.relname = is_t.table_name left join pg_namespace n on n.oid = c.relnamespace and n.nspname = is_t.table_schema  WHERE table_schema = $1 AND table_name = $2     ", dbName, tableName)
+	if q_err != nil {
+		log.Fatalf("can not query information_schema.tables for %s.%s\n%s", dbName, tableName, q_err.Error())
+	}
+	typeTable := "DO_NOT_EXIST"
+	for q_rows.Next() {
+		err := q_rows.Scan(&result.sizeBytes, &result.cntRows, &result.storageEng, &typeTable)
+		if err != nil {
+			log.Printf("can not query information_schema.tables for %s.%s", dbName, tableName)
+			log.Fatal(err.Error())
+		}
+		if typeTable != "BASE TABLE" {
+			result.onError = result.onError | 8
+		}
+	}
+	if typeTable == "DO_NOT_EXIST" {
+		result.onError = result.onError | 16
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,COALESCE(DATETIME_PRECISION,-9999),COALESCE(numeric_precision,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = $1 AND table_name = $2 order by ORDINAL_POSITION ", dbName, tableName)
+	if q_err != nil {
+		log.Fatalf("can not query information_schema.columns for %s.%s\n%s", dbName, tableName, q_err.Error())
+	}
+	for q_rows.Next() {
+		var a_col columnInfo
+		var a_str string
+		err := q_rows.Scan(&a_col.colName, &a_col.colType, &a_str, &a_col.dtPrec, &a_col.nuPrec)
+		if err != nil {
+			log.Print("can not scan columns informations")
+			log.Fatal(err.Error())
+		}
+		a_col.isNullable = (a_str == "YES")
+		a_col.isKindChar = (a_col.colType == "character varying")
+		a_col.isKindBinary = (a_col.colType == "bytea")
+		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "timestamp without time zone" || a_col.colType == "time" || a_col.colType == "timestamp with time zone")
+		a_col.isKindFloat = (a_col.colType == "real" || a_col.colType == "double precision")
+		a_col.haveFract = (a_col.colType == "timestamp without time zone" || a_col.colType == "timestamp with time zone" || a_col.colType == "time") && (a_col.dtPrec > 0)
+		result.columnInfos = append(result.columnInfos, a_col)
+	}
+
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+	q_rows, q_err = adbConn.QueryContext(ctx,
+		"SELECT pg_attribute.attname FROM pg_index, pg_class, pg_attribute, pg_namespace  WHERE nspname = $1 AND pg_class.relname = $2 AND indrelid = pg_class.oid AND pg_class.relnamespace = pg_namespace.oid AND    pg_attribute.attrelid = pg_class.oid AND pg_attribute.attnum = any(pg_index.indkey)  AND indisprimary order by array_position(pg_index.indkey,pg_attribute.attnum) ",
+		dbName, tableName)
+	if q_err != nil {
+		log.Fatalf("can not query INFORMATION_SCHEMA.STATISTICS  to get primary key info for %s.%s\n%s", dbName, tableName, q_err.Error())
+	}
+	for q_rows.Next() {
+		var a_str string
+		err := q_rows.Scan(&a_str)
+		if err != nil {
+			log.Print("can not scan primary key informations")
+			log.Fatal(err.Error())
+		}
+		result.primaryKey = append(result.primaryKey, a_str)
+	}
+
+	// ---------------------------------------------------------------------------------
+	result.fullName = fmt.Sprintf("%s.%s", result.dbName, result.tbName)
+	result.cntCols = len(result.columnInfos)
+	// ---------------------------------------------------------------------------------
+	if result.onError == 0 {
+		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+		q_rows, q_err = adbConn.QueryContext(ctx, fmt.Sprintf("select 1 from %s limit 1", result.fullName))
+		if q_err != nil {
+			log.Fatalf("can not query the table %s for one row\n", result.fullName, q_err.Error())
+		}
+		for q_rows.Next() {
+			var a_bigint uint64
+			err := q_rows.Scan(&a_bigint)
+			if err != nil {
+				log.Printf("can not scan a simple value from %s", result.fullName)
+				log.Fatal(err.Error())
+			}
+			result.isEmpty = false
+		}
+		// -------------------------------------------------------------------------
+		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+		q_rows, q_err = adbConn.QueryContext(ctx, "select count(*) from INFORMATION_SCHEMA.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = $1 AND EVENT_OBJECT_TABLE = $2", dbName, tableName)
+		if q_err != nil {
+			log.Fatalf("can not query INFORMATION_SCHEMA.TRIGGERS to detect trigger for table %s (%s) ", result.fullName, q_err.Error())
+		}
+		for q_rows.Next() {
+			var a_bigint uint64
+			err := q_rows.Scan(&a_bigint)
+			if err != nil {
+				log.Printf("can not scan count from INFORMATION_SCHEMA.TRIGGERS for table %s", result.fullName)
+				log.Fatal(err.Error())
+			}
+			result.withTrigger = a_bigint > 0
+		}
+		// -------------------------------------------------------------------------
+	}
+	// ---------------------------------------------------------------------------------
+	return result, true
+}
+
+// ------------------------------------------------------------------------------------------
+func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string, srcdriver string, dstdriver string) (MetadataTable, bool) {
+	result, _ := GetMysqlBasicMetadataInfo(adbConn, dbName, tableName)
 
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 
@@ -693,7 +977,7 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 	sql_cond_upper_pk, qry_indices_up_bound := generatePredicat(result.primaryKey, false, enumPkCols)
 	sql_cond_equal_pk, qry_indices_equality := generateEqualityPredicat(result.primaryKey, enumPkCols)
 	// ---------------------------
-	result.listColsSQL = generateListCols4Sql(result.columnInfos)
+	result.listColsSQL = generateListCols4Sql(result.columnInfos, true)
 	result.listColsPkSQL = generateListPkCols4Sql(result.primaryKey, "")
 	result.listColsPkFetchSQL = generateListPkColsFetch4Sql(result.primaryKey, enumPkCols)
 	result.listColsPkOrderSQL = generateListPkCols4Sql(result.primaryKey, "")
@@ -718,7 +1002,11 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 	result.param_indices_interval_up_qry = qry_indices_up_bound
 	// ---------------------------
 	if dumpmode == "cpy" {
-		result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
+		if dstdriver == "postgres" {
+			result.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", result.dbName, result.tbName, generateListCols4Sql(result.columnInfos, false))
+		} else {
+			result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
+		}
 	} else {
 		if dumpinsertwithcol == "full" {
 			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s`(%s) VALUES (", result.tbName, result.listColsSQL)
@@ -800,10 +1088,10 @@ func GetListTablesBySchema(adbConn *sql.Conn, dbName string, tab2exclude []strin
 }
 
 // ------------------------------------------------------------------------------------------
-func GetMetadataInfo4Tables(adbConn *sql.Conn, tableNames []aTable, guessPk bool, dumpmode string, dumpinsertwithcol string) ([]MetadataTable, bool) {
+func GetMetadataInfo4Tables(adbConn *sql.Conn, tableNames []aTable, guessPk bool, dumpmode string, dumpinsertwithcol string, srcdriver string, dstdriver string) ([]MetadataTable, bool) {
 	var result []MetadataTable
 	for j := 0; j < len(tableNames); j++ {
-		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk, dumpmode, dumpinsertwithcol)
+		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk, dumpmode, dumpinsertwithcol, srcdriver, dstdriver)
 		result = append(result, info)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].fullName < result[j].fullName })
@@ -844,35 +1132,56 @@ func GetMetadataInfo4Tables(adbConn *sql.Conn, tableNames []aTable, guessPk bool
 }
 
 // ------------------------------------------------------------------------------------------
-func CheckTableOnDestination(adbConn *sql.Conn, a_table MetadataTable) (string, bool) {
-	dstinfo, _ := GetBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+func CheckTableOnDestination(driver string, adbConn *sql.Conn, a_table MetadataTable) (string, bool, int) {
+	var dstinfo MetadataTable
+	if driver == "mysql" {
+		dstinfo, _ = GetMysqlBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+	} else {
+		dstinfo, _ = GetPostgresBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+	}
 	res := reflect.DeepEqual(a_table.columnInfos, dstinfo.columnInfos)
 	err_msg := ""
+	cnt_empty := 0
 	if !res {
 		err_msg = fmt.Sprintf("columns definitions are not identical for %s", a_table.fullName)
 	}
-	if dstinfo.withTrigger {
-		err_msg = err_msg + fmt.Sprintf(" / table %s have triggers", a_table.fullName)
+	if driver != "postgres" {
+		if dstinfo.withTrigger {
+			err_msg = err_msg + fmt.Sprintf(" / table %s have triggers", a_table.fullName)
+		}
+	} else {
+		if mode_debug {
+			log.Printf("Table %s on destination will be populate without firing triggers", a_table.fullName)
+		}
 	}
 	if !dstinfo.isEmpty {
 		err_msg = err_msg + fmt.Sprintf(" / table %s is not empty", a_table.fullName)
+		cnt_empty++
 	}
-	return err_msg, err_msg != ""
+	return err_msg, err_msg != "", cnt_empty
 }
 
 // ------------------------------------------------------------------------------------------
-func CheckTablesOnDestination(adbConn *sql.Conn, infTables []MetadataTable) {
+//
+// will fetch DDL informations on destination database , and compare table definitions
+func CheckTablesOnDestination(srcdriver string, dstdriver string, adbConn *sql.Conn, infTables []MetadataTable) {
 	cnterr := 0
+	cntempty := 0
 	for n := range infTables {
-		msg, err := CheckTableOnDestination(adbConn, infTables[n])
+		msg, err, notempty := CheckTableOnDestination(dstdriver, adbConn, infTables[n])
 		if err {
 			log.Printf("issue with table %s.%s on destination", infTables[n].dbName, infTables[n].tbName)
 			log.Printf("%s", msg)
 			cnterr++
 		}
+		cntempty = cntempty + notempty
 	}
-	if cnterr > 0 {
-		log.Fatalf("too many ERRORS")
+	if srcdriver != dstdriver && cntempty == 0 {
+		log.Printf("WARNING source is on %s and destination is on %s , i will assume that will work.", srcdriver, dstdriver)
+	} else {
+		if cnterr > 0 {
+			log.Fatalf("too many ERRORS")
+		}
 	}
 }
 
@@ -1403,13 +1712,21 @@ func generateListPkCols4Sql(col_pk []string, dml_desc string) string {
 }
 
 // ------------------------------------------------------------------------------------------
-func generateListCols4Sql(col_inf []columnInfo) string {
+func generateListCols4Sql(col_inf []columnInfo, backtick bool) string {
 	if len(col_inf) == 0 {
 		return ""
 	}
-	a_str := "`" + col_inf[0].colName + "`"
-	for ctab := 1; ctab < len(col_inf); ctab++ {
-		a_str = a_str + ",`" + col_inf[ctab].colName + "`"
+	var a_str string
+	if backtick {
+		a_str = "`" + col_inf[0].colName + "`"
+		for ctab := 1; ctab < len(col_inf); ctab++ {
+			a_str = a_str + ",`" + col_inf[ctab].colName + "`"
+		}
+	} else {
+		a_str = col_inf[0].colName
+		for ctab := 1; ctab < len(col_inf); ctab++ {
+			a_str = a_str + "," + col_inf[ctab].colName
+		}
 	}
 	return a_str
 }
@@ -1437,7 +1754,7 @@ func generateListCols4Csv(col_inf []columnInfo) string {
 // https://stackoverflow.com/questions/34861479/how-to-detect-when-bytes-cant-be-converted-to-string-in-go
 //
 //	example https://go.dev/play/p/6yHonH0Mae
-var quote_substitute_string = [256]uint8{
+var quote_substitute_string_mysql = [256]uint8{
 	//    1    2    3    4     5    6    7    8    9    A    B     C    D    E    F
 	'0', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'n', ' ', ' ', 'r', ' ', ' ', // 0x00-0x0F
 	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'Z', ' ', ' ', ' ', ' ', ' ', // 0x10-0x1F
@@ -1458,7 +1775,7 @@ var quote_substitute_string = [256]uint8{
 	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xF0-0xFF
 }
 
-func needCopyForquoteString(s_ptr *string) (*string, int, int, byte) {
+func needCopyForquoteStringMysql(s_ptr *string) (*string, int, int, byte) {
 	s_len := len(*s_ptr)
 	if s_len == 0 {
 		return s_ptr, 0, -1, 0
@@ -1467,7 +1784,7 @@ func needCopyForquoteString(s_ptr *string) (*string, int, int, byte) {
 	var new_char byte
 	for {
 		first_char := (*s_ptr)[b_pos]
-		new_char = quote_substitute_string[first_char]
+		new_char = quote_substitute_string_mysql[first_char]
 		if new_char != ' ' {
 			return s_ptr, s_len, b_pos, new_char
 		}
@@ -1478,7 +1795,7 @@ func needCopyForquoteString(s_ptr *string) (*string, int, int, byte) {
 	}
 }
 
-func quoteStringFromPos(s_ptr *string, s_len int, b_pos int, new_char byte) (*string, int) {
+func quoteStringFromPosMysql(s_ptr *string, s_len int, b_pos int, new_char byte) (*string, int) {
 	var new_str strings.Builder
 	new_str.WriteString((*s_ptr)[:b_pos])
 	new_str.WriteByte('\\')
@@ -1486,7 +1803,7 @@ func quoteStringFromPos(s_ptr *string, s_len int, b_pos int, new_char byte) (*st
 	b_pos++
 	for b_pos < s_len {
 		first_char := (*s_ptr)[b_pos]
-		new_char = quote_substitute_string[first_char]
+		new_char = quote_substitute_string_mysql[first_char]
 		if new_char == ' ' {
 			new_str.WriteByte(first_char)
 		} else {
@@ -1636,6 +1953,76 @@ func needQuoteForCsv(s_ptr *string) bool {
 }
 
 // ------------------------------------------------------------------------------------------
+// postgres : we need only to quote the single quote
+var quote_substitute_string_postgres = [256]uint8{
+	//    1    2    3    4     5    6      7    8    9       A    B       C       D    E    F
+	'Z', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\x0A', ' ', ' ', '\x0D', ' ', ' ', // 0x00-0x0F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\x1A', ' ', ' ', ' ', ' ', ' ', // 0x10-0x1F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', '\x27', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x20-0x2F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x30-0x3F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x40-0x4F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\x5C', ' ', ' ', ' ', // 0x50-0x5F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x60-0x6F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x70-0x7F
+	//    1    2    3    4     5    6    7    8    9    A    B     C    D    E    F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x80-0x8F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0x90-0x9F
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xA0-0xAF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xB0-0xBF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xC0-0xCF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xD0-0xDF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xE0-0xEF
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', // 0xF0-0xFF
+}
+
+const hextable = "0123456789abcdef"
+
+func needCopyForquoteStringPostgres(s_ptr *string) (*string, int, int, byte) {
+	s_len := len(*s_ptr)
+	if s_len == 0 {
+		return s_ptr, 0, -1, 0
+	}
+	b_pos := 0
+	var new_char byte
+	for {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string_postgres[first_char]
+		if new_char != ' ' {
+			return s_ptr, s_len, b_pos, new_char
+		}
+		b_pos++
+		if b_pos == s_len {
+			return s_ptr, s_len, -1, 0
+		}
+	}
+}
+
+func quoteStringFromPosPostgres(s_ptr *string, s_len int, b_pos int, new_char byte) (*string, int) {
+	var new_str strings.Builder
+	new_str.WriteString((*s_ptr)[:b_pos])
+	if new_char != 'Z' {
+		new_str.WriteString("\\x")
+		new_str.WriteByte(hextable[new_char>>4])
+		new_str.WriteByte(hextable[new_char&0x0f])
+	}
+	b_pos++
+	for b_pos < s_len {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string_postgres[first_char]
+		if new_char == ' ' {
+			new_str.WriteByte(first_char)
+		} else if new_char != 'Z' {
+			new_str.WriteString("\\x")
+			new_str.WriteByte(hextable[new_char>>4])
+			new_str.WriteByte(hextable[new_char&0x0f])
+		}
+		b_pos++
+	}
+	n_str := new_str.String()
+	return &n_str, len(n_str)
+}
+
+// ------------------------------------------------------------------------------------------
 type cachedataChunkGenerator struct {
 	table_id     int
 	lastusagecnt int
@@ -1646,7 +2033,7 @@ type cachedataChunkGenerator struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int, cntBrowser int) {
+func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	if dumpmode == "sql" || dumpmode == "cpy" {
 		// ------------------------------------------------------------------
@@ -1790,7 +2177,7 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 				arr_ind := 1 + n*2 + (a_dta_chunk.usedlen-1)*2*lastTable.tab_meta.cntCols
 				arr_ind_inc := 2 * lastTable.tab_meta.cntCols
 				// -------------------------------------------------
-				if lastTable.tab_meta.columnInfos[n].isKindBinary {
+				if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "mysql" {
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
 						if !cell.Valid {
@@ -1799,15 +2186,14 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 							arr_ind -= arr_ind_inc
 							continue
 						}
-						var s_ptr *string
-						var cell_size int
-						s_ptr, cell_size = quoteBinary(&cell.String)
+						s_ptr, cell_size := quoteBinary(&cell.String)
 						lastTable.buf_arr[arr_ind].kind = 2
 						lastTable.buf_arr[arr_ind].val = s_ptr
-						b_siz += cell_size + 2 + 8
+						// 7 for _binary and 1 for space and 2 for quotes
+						b_siz += cell_size + 7 + 1 + 2
 						arr_ind -= arr_ind_inc
 					}
-				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote {
+				} else if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "postgres" {
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
 						if !cell.Valid {
@@ -1816,16 +2202,50 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 							arr_ind -= arr_ind_inc
 							continue
 						}
-						var s_ptr *string
-						var need_quote int
-						var new_char byte
-						var cell_size int
-						s_ptr, cell_size, need_quote, new_char = needCopyForquoteString(&cell.String)
+						s_ptr := hex.EncodeToString([]byte(cell.String))
+						cell_size := len(s_ptr)
+						lastTable.buf_arr[arr_ind].kind = 2
+						lastTable.buf_arr[arr_ind].val = &s_ptr
+						// 7 for decode( and 2 for quotes and 7 for ,'hex')
+						b_siz += cell_size + 7 + 2 + 7
+						arr_ind -= arr_ind_inc
+					}
+				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mysql" {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+						cell := a_dta_chunk.rows[j].cols[n]
+						if !cell.Valid {
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
+						}
+						s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringMysql(&cell.String)
 						if need_quote != -1 {
-							s_ptr, cell_size = quoteStringFromPos(&cell.String, cell_size, need_quote, new_char)
+							s_ptr, cell_size = quoteStringFromPosMysql(&cell.String, cell_size, need_quote, new_char)
 						}
 						b_siz += cell_size + 2
 						lastTable.buf_arr[arr_ind].kind = 1
+						lastTable.buf_arr[arr_ind].val = s_ptr
+						arr_ind -= arr_ind_inc
+					}
+				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "postgres" {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+						cell := a_dta_chunk.rows[j].cols[n]
+						if !cell.Valid {
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
+						}
+						s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringPostgres(&cell.String)
+						if need_quote != -1 {
+							s_ptr, cell_size = quoteStringFromPosPostgres(&cell.String, cell_size, need_quote, new_char)
+							lastTable.buf_arr[arr_ind].kind = 3
+							b_siz += cell_size + 3
+						} else {
+							lastTable.buf_arr[arr_ind].kind = 1
+							b_siz += cell_size + 2
+						}
 						lastTable.buf_arr[arr_ind].val = s_ptr
 						arr_ind -= arr_ind_inc
 					}
@@ -1882,7 +2302,17 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 					b.WriteString(*a_cell.val)
 					b.WriteString("'")
 				case 2:
-					b.WriteString("_binary '")
+					if dst_driver == "mysql" {
+						b.WriteString("_binary '")
+						b.WriteString(*a_cell.val)
+						b.WriteString("'")
+					} else {
+						b.WriteString("decode('")
+						b.WriteString(*a_cell.val)
+						b.WriteString("','hex')")
+					}
+				case 3:
+					b.WriteString("E'")
 					b.WriteString(*a_cell.val)
 					b.WriteString("'")
 				}
@@ -2322,6 +2752,7 @@ func main() {
 	arg_trace := flag.Bool("trace", false, "trace mode")
 	arg_loop := flag.Int("loopcnt", 1, "how many times we are going to loop (for debugging)")
 	// ----------------------------------------------------------------------------------
+	arg_db_driver := flag.String("driver", "mysql", "SQL engine , mysql / postgres")
 	arg_db_port := flag.Int("port", 3306, "the database port")
 	arg_db_host := flag.String("host", "127.0.0.1", "the database host")
 	arg_db_user := flag.String("user", "mysql", "the database connection user")
@@ -2340,6 +2771,9 @@ func main() {
 	arg_dumpcompress_level := flag.Int("dumpcompresslevel", 1, "which zstd compression level ( 1 , 3 , 6 , 11 ) ")
 	arg_dumpcompress_concur := flag.Int("dumpcompressconcur", 4, "which zstd compression concurency ")
 	// ------------
+	arg_db_name := flag.String("db", "", "the database to connect ( postgres only) ")
+	arg_dst_db_name := flag.String("dst-db", "", "the database to connect ( postgres only) ")
+	// ------------
 	var arg_schemas arrayFlags
 	flag.Var(&arg_schemas, "schema", "schema(s) of tables to dump")
 	// ------------
@@ -2352,6 +2786,7 @@ func main() {
 	arg_guess_pk := flag.Bool("guessprimarykey", false, "guess a primary key in case table does not have one")
 	arg_all_tables := flag.Bool("alltables", false, "all tables of the specified database")
 	// ------------
+	arg_dst_db_driver := flag.String("dst-driver", "mysql", "SQL engine , mysql / postgres")
 	arg_dst_db_port := flag.Int("dst-port", 3306, "the database port")
 	arg_dst_db_host := flag.String("dst-host", "127.0.0.1", "the database host")
 	arg_dst_db_user := flag.String("dst-user", "mysql", "the database connection user")
@@ -2390,18 +2825,22 @@ func main() {
 		os.Exit(5)
 	}
 	if len(*arg_dumpfile) == 0 && *arg_dumpmode != "cpy" {
+		log.Printf("the parameter dumpfile is empty")
 		flag.Usage()
 		os.Exit(6)
 	}
 	if len(*arg_dumpmode) != 0 && (*arg_dumpmode != "sql" && *arg_dumpmode != "csv" && *arg_dumpmode != "nul" && *arg_dumpmode != "cpy") {
+		log.Printf("invalid value for dumpmode")
 		flag.Usage()
 		os.Exit(7)
 	}
 	if len(*arg_dumpcompress) != 0 && (*arg_dumpcompress != "zstd") {
+		log.Printf("invalid value for dumpcompress")
 		flag.Usage()
 		os.Exit(8)
 	}
 	if *arg_insert_size > *arg_chunk_size {
+		log.Printf("invalid values for chunksize ,insertsize\n insertsize (%d) must be less or equal then chunksize (%d)", *arg_insert_size, *arg_chunk_size)
 		flag.Usage()
 		os.Exit(9)
 	}
@@ -2421,6 +2860,22 @@ func main() {
 	if len(*arg_dumpfile) != 0 && len(*arg_dumpdir) != 0 && strings.ContainsRune(*arg_dumpfile, os.PathSeparator) {
 		flag.Usage()
 		os.Exit(13)
+	}
+	if len(*arg_db_name) != 0 && (*arg_db_driver == "mysql") {
+		flag.Usage()
+		os.Exit(16)
+	}
+	if len(*arg_dst_db_name) != 0 && (*arg_dst_db_driver == "mysql") {
+		flag.Usage()
+		os.Exit(17)
+	}
+	if len(*arg_db_name) == 0 && (*arg_db_driver == "postgres") {
+		flag.Usage()
+		os.Exit(18)
+	}
+	if len(*arg_dst_db_name) == 0 && (*arg_dst_db_driver == "postgres") {
+		flag.Usage()
+		os.Exit(19)
 	}
 	mode_trace = *arg_trace
 	if mode_trace {
@@ -2464,9 +2919,19 @@ func main() {
 	var conDst []*sql.Conn
 	var dbSrc *sql.DB
 	var dbDst *sql.DB
-	dbSrc, conSrc, _, _ = GetaSynchronizedConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
+	if *arg_db_driver == "mysql" {
+		dbSrc, conSrc, _, _ = GetaSynchronizedMysqlConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
+	}
+	if *arg_db_driver == "postgres" {
+		dbSrc, conSrc, _, _ = GetaSynchronizedPostgresConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
+	}
 	if *arg_dumpmode == "cpy" {
-		dbDst, conDst, _ = GetDstConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_schemas[0])
+		if *arg_dst_db_driver == "mysql" {
+			dbDst, conDst, _ = GetDstMysqlConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_schemas[0])
+		}
+		if *arg_dst_db_driver == "postgres" {
+			dbDst, conDst, _ = GetDstPostgresConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, *arg_dst_db_name)
+		}
 	}
 	// ----------------------------------------------------------------------------------
 	var tables2dump []aTable
@@ -2480,12 +2945,12 @@ func main() {
 	if mode_debug {
 		log.Print(tables2dump)
 	}
-	r, _ := GetMetadataInfo4Tables(conSrc[0], tables2dump, *arg_guess_pk, *arg_dumpmode, *arg_dumpinsert)
+	r, _ := GetMetadataInfo4Tables(conSrc[0], tables2dump, *arg_guess_pk, *arg_dumpmode, *arg_dumpinsert, *arg_db_driver, *arg_dst_db_driver)
 	if mode_debug {
 		log.Printf("tables infos  => %s", r)
 	}
 	if *arg_dumpmode == "cpy" {
-		CheckTablesOnDestination(conDst[0], r)
+		CheckTablesOnDestination(*arg_db_driver, *arg_dst_db_driver, conDst[0], r)
 	}
 	// ----------------------------------------------------------------------------------
 	if *arg_cpuprofile != "" {
@@ -2557,7 +3022,7 @@ func main() {
 		wg_gen.Add(1)
 		go func(id int) {
 			defer wg_gen.Done()
-			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, sql_to_write, *arg_insert_size, cntBrowser)
+			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
 		}(j)
 	}
 	// ------------

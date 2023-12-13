@@ -156,7 +156,7 @@ do
     then
 	for DB in foobar barfoo test
 	do
-	    $NEED_SUDO docker exec -i "${NAM}"  psql   -h localhost -U admin -d paradump -c " create schema $DB ; "
+	    $NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump -c " create schema $DB ; "
 	done
     fi
     for KIND in tab viw
@@ -175,7 +175,7 @@ do
 			fi
 			if [[ "$SFT" = "postgres" ]]
 			then
-			    $NEED_SUDO docker exec  -e PGOPTIONS="-c search_path=$DB" -i "${NAM}"   psql   -h localhost -U admin -d paradump  < "$F"
+			    $NEED_SUDO docker exec  -e PGOPTIONS="-c search_path=$DB" -i "${NAM}"   psql -q  -h localhost -U admin -d paradump  < "$F"
 			fi
 		    ) 2>&1 | tail -100 &
 		fi
@@ -197,7 +197,7 @@ do
 	if [[ "$ENGINE" = "postgres" ]]
 	then
 	    ENV_CMD="PGOPTIONS=-c search_path=$DB"
-	    CNT_EXE="psql   -h localhost -U admin -d paradump"
+	    CNT_EXE="psql -q  -h localhost -U admin -d paradump"
 	fi
 	for D in init_*.sql.zst
 	do
@@ -213,16 +213,16 @@ do
 		fi
 		if [[ $TAB = "ticket_tag" && "$ENGINE" = "postgres" ]]
 		then
-		    # shellcheck disable=SC2086,SC2016
-		    ( time zstd -dc "${D}" | sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' | sed "s|\([^\\]\)\\\\'|\1''|g" | sed 's|\([^\\]\)\\"|\1"|g' | sed -e 's|\\\\|\\|g' |  $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+		    # shellcheck disable=SC2086,SC2016,SC2030
+		    ( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' | sed 's|\\"|"|g;s|\\Z|\\x1A|g;s|\\0||g;s|\(,[0-9][0-9]*,\)|\1E|g;' ) | $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
 		else
 		    if [[ $TAB = "account_metadatas" && "$ENGINE" = "postgres" ]]
 		    then
-			# shellcheck disable=SC2086,SC2016
-			( time zstd -dc "${D}" | sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' | sed "s|,0x\([0-9A-F][0-9A-F]*\),|,decode('\1','hex'),|g" |                       $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+			# shellcheck disable=SC2086,SC2016,SC2030,SC2031
+			( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' | sed "s|,0x\([0-9A-F][0-9A-F]*\),|,decode('\1','hex'),|g" ) |                       $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
 		    else
-			# shellcheck disable=SC2086,SC2016
-			( time zstd -dc "${D}" | sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' |                                                                                  $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+			# shellcheck disable=SC2086,SC2016,SC2031
+			( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/INSERT INTO \1/' ) |                                                                                  $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
 		    fi
 		fi
 	    ) | tail -500 &
@@ -315,4 +315,50 @@ do
 	O_C=$C
     fi
 done < "$CMP_FILE"
+#
+(
+for ENGINE in mysql postgres
+do
+    for DB in foobar barfoo
+    do
+	if [[ "$ENGINE" = "mysql" ]]
+	then
+	    ENV_CMD="MYSQL_PWD=test1234"
+	    CNT_EXE="/usr/bin/mysql  -u foobar  -h localhost ${DB} "
+	fi
+	if [[ "$ENGINE" = "postgres" ]]
+	then
+	    ENV_CMD="PGOPTIONS=-c search_path=$DB"
+	    CNT_EXE="psql -qAt -F, -h localhost -U admin -d paradump"
+	fi
+	if [[ $DB = "barfoo" ]]
+   	then
+	    CONTAINER_DST=${ENGINE}_target
+	else
+	    CONTAINER_DST=${ENGINE}_source
+	fi
+	for D in mysql:ticket_tag:"label_hex_u8 <> hex(cast(convert(label using utf8mb4)  as binary))" \
+		 mysql:ticket_tag:"label_hex_l1 <> hex(cast(convert(label using latin1 )  as binary))" \
+		 mysql:sensor_tag:"cast( hex(label) as char character set latin1 ) <>  hex_label"   \
+		 postgres:ticket_tag:"upper(encode(convert_to(label,'UTF8'),'hex')) <> label_postgres_hex_u8"
+	do
+	    ENG=$( echo "$D"  | cut -d: -f1 )
+	    if [[ "$ENG" == "$ENGINE" ]]
+	    then
+		TAB=$( echo "$D"  | cut -d: -f2 )
+		WHR=$( echo "$D"  | cut -d: -f3- )
+		# shellcheck disable=SC2086
+		( ( echo "select 'CHECK_COUNT = 'as REM , '$TAB' as T , '=' as A , '$ENGINE' as ENGINE , '=' as B , '$DB' as D , '=' as C , count(*) as CNT from $TAB where $WHR ;" | docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1 | tail -500 ) &
+	    fi
+	done
+    done
+done
+wait
+) | sed 's|,||g;s|\t||g;s| ||g;' | grep ^CHEC | sort > "$CMP_FILE"
+#
+if [[ $( grep -c '=0$' "$CMP_FILE" ) != 0 ]]
+then
+    echo BUG import
+    grep '=0$' "$CMP_FILE"
+fi    
 #

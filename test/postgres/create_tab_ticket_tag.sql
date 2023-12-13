@@ -4,5 +4,6 @@ CREATE TABLE ticket_tag (
   label         varchar(128) ,
   label_hex_u8  varchar(256) ,
   label_hex_l1  varchar(256) ,
+  label_postgres_hex_u8 varchar(256) ,
   PRIMARY KEY (id,lang_iso3)
 )   ;

@@ -179,13 +179,37 @@ echo "Test  22: ok ( $? )"
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -schema foobar -guessprimarykey  --dumpdir=/tmp/ --dumpfile=dump_%z%            $DEBUG_CMD " && echo "Test  23: failure" && exit 23
 echo "Test  23: ok ( $? )"
 
-# test 24 , db is specified twice
+# test 24 , schema is specified twice
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -schema barfoo -schema barfoo -guessprimarykey  -alltables                                             $DEBUG_CMD " && echo "Test  24: failure" && exit 24
 echo "Test  24: ok ( $? )"
 
 # test 25 , table is specified twice
 eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -table client_info -table sensor_tag -table client_info -schema barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  25: failure" && exit 25
 echo "Test  25: ok ( $? )"
+
+# test 26 , db is specified for default ( mysql )
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -db foobar -table client_info -table sensor_tag -schema barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  26: failure" && exit 26
+echo "Test  26: ok ( $? )"
+
+# test 27 , db is specified for mysql
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -driver mysql -db foobar -table client_info -table sensor_tag -schema barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  27: failure" && exit 27
+echo "Test  27: ok ( $? )"
+
+# test 28 , db is not specified for postgres
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -driver postgres -table client_info -table sensor_tag -schema barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  28: failure" && exit 28
+echo "Test  28: ok ( $? )"
+
+# test 29 , dmode cpy dst-db is specified for default ( mysql ) 
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -dst-db foobar -table client_info -table sensor_tag -schema barfoo -guessprimarykey --dumpmode cpy           $DEBUG_CMD " && echo "Test  29: failure" && exit 29
+echo "Test  29: ok ( $? )"
+
+# test 30 , dst-db is specified for mysql
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -dst-driver mysql -dst-db foobar -table client_info -table sensor_tag -schema barfoo -guessprimarykey  --dumpmode cpy $DEBUG_CMD " && echo "Test  30: failure" && exit 30
+echo "Test  30: ok ( $? )"
+
+# test 31 , db is not specified for postgres
+eval "$BINARY  -port 4000 -pwd test1234 -user foobar  -dst-driver postgres -table client_info -table sensor_tag -schema barfoo -guessprimarykey --dumpmode cpy              $DEBUG_CMD " && echo "Test  31: failure" && exit 31
+echo "Test  31: ok ( $? )"
 
 # test 100  dump client_info ticket_tag sql insertsize 1 => count lines and compare with mysqldump
 TMPDIR_T100=$(mktemp -d )
