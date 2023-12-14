@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"os"
 	"reflect"
+	"regexp"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -664,6 +665,8 @@ func GetMysqlBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName strin
 		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "datetime" || a_col.colType == "time" || a_col.colType == "timestamp")
 		a_col.isKindFloat = (a_col.colType == "float" || a_col.colType == "double")
 		a_col.haveFract = (a_col.colType == "datetime" || a_col.colType == "timestamp" || a_col.colType == "time") && (a_col.dtPrec > 0)
+		re := regexp.MustCompile(`int(\([0-9]*\))`)
+		a_col.colSqlType = re.ReplaceAllString(a_col.colSqlType, "int")
 		result.columnInfos = append(result.columnInfos, a_col)
 	}
 
@@ -894,8 +897,8 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 				log.Printf("table info is :")
 				log.Printf("t.dbName         : %s", result.dbName)
 				log.Printf("t.tbName         : %s", result.tbName)
-				log.Printf("t.cntRows        : %s", result.cntRows)
-				log.Printf("t.sizeBytes      : %s", result.sizeBytes)
+				log.Printf("t.cntRows        : %d", result.cntRows)
+				log.Printf("t.sizeBytes      : %d", result.sizeBytes)
 				log.Printf("t.storageEng     : %s", result.storageEng)
 				var a_str string
 				for _, v := range result.columnInfos {
@@ -919,8 +922,8 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 					}
 					log.Printf("         -  %9d [ %s ] %s ", i.cardinality, a_str, i.idxName)
 				}
-				log.Printf("t.fakePrimaryKey : %s", result.fakePrimaryKey)
-				log.Printf("t.onError        : %s", result.onError)
+				log.Printf("t.fakePrimaryKey : %t", result.fakePrimaryKey)
+				log.Printf("t.onError        : %d", result.onError)
 			}
 			// -----------------------------------------------------------------
 			//
@@ -1144,6 +1147,10 @@ func CheckTableOnDestination(driver string, adbConn *sql.Conn, a_table MetadataT
 	cnt_empty := 0
 	if !res {
 		err_msg = fmt.Sprintf("columns definitions are not identical for %s", a_table.fullName)
+		if mode_debug {
+			log.Print(a_table.columnInfos)
+			log.Print(dstinfo.columnInfos)
+		}
 	}
 	if driver != "postgres" {
 		if dstinfo.withTrigger {

@@ -356,7 +356,7 @@ done
 wait
 ) | sed 's|,||g;s|\t||g;s| ||g;' | grep ^CHEC | sort > "$CMP_FILE"
 #
-if [[ $( grep -c '=0$' "$CMP_FILE" ) != 0 ]]
+if [[ $( grep -v -c '=0$' "$CMP_FILE" ) != 0 ]]
 then
     echo BUG import
     grep '=0$' "$CMP_FILE"
