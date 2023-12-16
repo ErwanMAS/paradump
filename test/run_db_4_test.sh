@@ -12,7 +12,7 @@ docker ps -a -q >/dev/null 2>&1 || {
     }
     NEED_SUDO="sudo"
 }
-
+#------------------------------------------------------------------------------------------
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
 TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
 SRC_PG="postgres:10.23-bullseye=postgres_source=3"
@@ -22,21 +22,13 @@ TGT_MS="mcr.microsoft.com/mssql/server:2022-latest=mssql_target=6"
 
 
 ALL_INSTANCES="$SRC_DB $TGT_DB"
-
 ALL_INSTANCES_PORT="$SRC_DB=4000 $TGT_DB=4900"
 
 ALL_INSTANCES="$SRC_MS $TGT_MS"
-
 ALL_INSTANCES_PORT="$SRC_MS=8200 $TGT_MS=8300"
 
 ALL_INSTANCES="$SRC_MS $TGT_MS $SRC_DB $TGT_DB $SRC_PG $TGT_PG"
-
 ALL_INSTANCES_PORT="$SRC_MS=8200 $TGT_MS=8300 $SRC_PG=8000 $TGT_PG=8100 $SRC_DB=4000 $TGT_DB=4900"
-
-ALL_INSTANCES="$SRC_MS $TGT_MS $SRC_DB $TGT_DB"
-
-ALL_INSTANCES_PORT="$SRC_MS=8200 $TGT_MS=8300 $SRC_DB=4000 $TGT_DB=4900"
-
 #------------------------------------------------------------------------------------------
 BUILD_DCK=1
 LOAD_DATA=1
@@ -51,10 +43,8 @@ then
     LOAD_DATA=0
 fi
 #--------------------
-PAT_FILES="init_*.sql.zst"
-
 PAT_FILES="init_ticket_tag.sql.zst"
-
+PAT_FILES="init_*.sql.zst"
 #------------------------------------------------------------------------------------------
 if [[ "$BUILD_DCK" = 1 ]]
 then   
