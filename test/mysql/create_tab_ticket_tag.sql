@@ -5,5 +5,6 @@ CREATE TABLE `ticket_tag` (
   label_hex_u8          varchar(256) ,
   label_hex_l1          varchar(256) ,
   label_postgres_hex_u8 varchar(256) ,
+  label_hex_u16le varchar(256) ,
   PRIMARY KEY (`id`,lang_iso3)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ;
