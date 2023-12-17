@@ -72,13 +72,13 @@ do
     for port in $DB_PORTS
     do
 	echo "timing mysqldump $port on ${DB_HOST}"
-	time bash -c "${DCK_MYSQL}dump  -u root -ptest1234  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --column-statistics=0 ${SCHEMA} --result-file=/dev/null"
+	time bash -c "${DCK_MYSQL}dump  -u root -pTest+12345  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --column-statistics=0 ${SCHEMA} --result-file=/dev/null"
 	echo "timing mysqlpump $port on ${DB_HOST}"
-	time bash -c "${DCK_MYSQL}pump  -u root -ptest1234  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks   --no-create-info --no-create-db       --default-parallelism=10    --databases ${SCHEMA} --result-file=/dev/null"
+	time bash -c "${DCK_MYSQL}pump  -u root -pTest+12345  --port $port -h ${DB_HOST}  --skip-add-drop-table --skip-add-locks   --no-create-info --no-create-db       --default-parallelism=10    --databases ${SCHEMA} --result-file=/dev/null"
 	echo "timing paradump sql $port on ${DB_HOST}"
-	time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -schema ${SCHEMA} -alltables --dumpmode sql -dumpfile /dev/null"
+	time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd Test+12345 -user foobar  -guessprimarykey -schema ${SCHEMA} -alltables --dumpmode sql -dumpfile /dev/null"
 	echo "timing paradump csv $port on ${DB_HOST}"
-	time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd test1234 -user foobar  -guessprimarykey -schema ${SCHEMA} -alltables --dumpmode csv -dumpfile /dev/null"
+	time bash -c "$BINARY  -port $port -host ${DB_HOST} -pwd Test+12345 -user foobar  -guessprimarykey -schema ${SCHEMA} -alltables --dumpmode csv -dumpfile /dev/null"
     done
 done
 

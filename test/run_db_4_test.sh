@@ -124,13 +124,7 @@ then
 	then
 	    LOCAL_PORT=1433
 	fi
-	if [[ "$(uname -s)" != "Darwin"  ]]
-	then
-	    DCK_NET="--net=host"
-	    EXTRA_PARAMS+=("--port=${PRT}")
-	else
-	    DCK_NET="--publish=$PRT:${LOCAL_PORT}"
-	fi
+	DCK_NET="--publish=$PRT:${LOCAL_PORT}"
 	if [[ "$SFT" = "mysql" ]]
 	then
 	    $NEED_SUDO docker run --platform="${DOCKER_ARCH}"   "$DCK_NET" --name "${NAM}" -e MYSQL_ROOT_PASSWORD=Test+12345 -e MYSQL_DATABASE=foobar -e MYSQL_USER=foobar -eMYSQL_PASSWORD=Test+12345 -d "${IMG}" mysqld  --server-id="${SID}"  \
