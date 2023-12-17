@@ -446,7 +446,7 @@ do
 	    # shellcheck disable=SC2001
 	    TAB=$( echo "$D" | sed 's|^init_\(.*\).sql.zst|\1|p;d' )
 	    # shellcheck disable=SC2086
-	    ( ( echo "select 'CHECK_COUNT = 'as REM , '$TAB' as T , '=' as A , '$ENGINE' as ENGINE , '=' as B , '$DB' as D , '=' as C , count(*) as CNT from $DB.$TAB;" | docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1 | tail -500 ) & 
+	    ( ( echo "select 'CHECK_COUNT = 'as REM , '$TAB' as T , '=' as A , '$ENGINE' as ENGINE , '=' as B , '$DB' as D , '=' as C , count(*) as CNT from $DB.$TAB;" | $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1 | tail -500 ) & 
 	done
     done
 done
@@ -517,7 +517,7 @@ do
 		TAB=$( echo "$D"  | cut -d: -f2 )
 		WHR=$( echo "$D"  | cut -d: -f3- )
 		# shellcheck disable=SC2086
-		( ( echo "select 'CHECK_COUNT = 'as REM , '$TAB' as T , '=' as A , '$ENGINE' as ENGINE , '=' as B , '$DB' as D , '=' as C , count(*) as CNT from $DB.$TAB where $WHR ;" | docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1 | tail -500 ) &
+		( ( echo "select 'CHECK_COUNT = 'as REM , '$TAB' as T , '=' as A , '$ENGINE' as ENGINE , '=' as B , '$DB' as D , '=' as C , count(*) as CNT from $DB.$TAB where $WHR ;" | $NEED_SUDO docker exec  -e "$ENV_CMD" -i  $CONTAINER_DST $CNT_EXE  ) 2>&1 | tail -500 ) &
 	    fi
 	done
     done
