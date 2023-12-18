@@ -61,6 +61,7 @@ truncate_tables() {
 	    ${DCK_MYSQL} --port 4000 barfoo -e "truncate table $T ;" >/dev/null 2>&1 &
 	    ${DCK_MYSQL} --port 4900 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	    ${DCK_MYSQL} --port 4000 test   -e "truncate table $T ;" >/dev/null 2>&1 &
+	    ${DCK_PSQL}  --port 8100        -c "truncate table foobar.$T ;" >/dev/null 2>&1 &
 	    wait
 	done
     )
