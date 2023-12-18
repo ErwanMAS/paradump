@@ -29,8 +29,9 @@ docker ps -a -q >/dev/null 2>&1 || {
     NEED_SUDO="sudo"
 }
 
-DCK_MYSQL="$NEED_SUDO docker run --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysql"
-DCK_MYSQL_DUMP="$NEED_SUDO docker run --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysqldump"
+DCK_MYSQL="$NEED_SUDO docker run --rm --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysql -u foobar -pTest+12345 -h 127.0.0.1 "
+DCK_MYSQL_DUMP="$NEED_SUDO docker run --rm --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysqldump -u foobar -pTest+12345 -h 127.0.0.1 "
+DCK_PSQL="$NEED_SUDO docker run --rm --network=host -e PGPASSWORD=Test+12345 -i bitnami/postgresql:11-debian-11 psql -h 127.0.0.1 -U admin -d paradump -qAt -F: "
 
 # ------------------------------------------------------------------------------------------
 # tables that have binary or line return that will prevent to use CSV
@@ -56,10 +57,10 @@ truncate_tables() {
     (
 	for T in $LIST_TABLES
 	do
-	    ${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 foobar -e "truncate table $T ;" >/dev/null 2>&1 &
-	    ${DCK_MYSQL}  -u foobar -pTest+12345 --port 4000 -h 127.0.0.1 barfoo -e "truncate table $T ;" >/dev/null 2>&1 &
-	    ${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
-	    ${DCK_MYSQL}  -u foobar -pTest+12345 --port 4000 -h 127.0.0.1 test   -e "truncate table $T ;" >/dev/null 2>&1 &
+	    ${DCK_MYSQL} --port 4900 foobar -e "truncate table $T ;" >/dev/null 2>&1 &
+	    ${DCK_MYSQL} --port 4000 barfoo -e "truncate table $T ;" >/dev/null 2>&1 &
+	    ${DCK_MYSQL} --port 4900 test   -e "truncate table $T ;" >/dev/null 2>&1 &
+	    ${DCK_MYSQL} --port 4000 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	    wait
 	done
     )
@@ -77,7 +78,7 @@ do
     do
 	for DB in barfoo foobar
 	do
-	    CNT=$(${DCK_MYSQL}  -u foobar -pTest+12345 --port $port  -h 127.0.0.1 $DB -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+	    CNT=$(${DCK_MYSQL} --port $port $DB -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
 	    if [[ -z "$CNT" ]]
 	    then
 		echo "can cont count from $T"
@@ -231,7 +232,7 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -pTest+12345  --port 4000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR_T100}/mysqldump_foobar_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} --port 4000 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR_T100}/mysqldump_foobar_${T}.sql" 2>/dev/null
 done
 for T in $LIST_SMALL_TABLES
 do
@@ -267,12 +268,12 @@ eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema
 FAIL=0
 for T in $LIST_SMALL_TABLES
 do
-    CNT=$(${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL} --port 4900 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -pTest+12345  --port 4900 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR}/mysqldump_foobar_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} --port 4900 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR}/mysqldump_foobar_${T}.sql" 2>/dev/null
 done
 for T in $LIST_SMALL_TABLES
 do
@@ -309,12 +310,12 @@ eval "$BINARY  -dst-port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -sc
 FAIL=0
 for T in $LIST_TABLES
 do
-    CNT=$(${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 barfoo -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL} --port 4900 barfoo -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -pTest+12345  --port 4900 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact barfoo "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR}/mysqldump_barfoo_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} --port 4900 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact barfoo "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR}/mysqldump_barfoo_${T}.sql" 2>/dev/null
 done
 for T in $LIST_SMALL_TABLES
 do
@@ -445,7 +446,7 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -pTest+12345  --port 4000 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} --port 4000 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_${T}.sql" 2>/dev/null
 done
 for T in $LIST_TABLES
 do
@@ -506,18 +507,18 @@ eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema
 FAIL=0
 for T in $LIST_TABLES
 do
-    CNT=$(${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_MYSQL} --port 4900 foobar -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-CNT_TAG_MATCH_U8=$(${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_u8 = hex(cast(convert(label using utf8mb4)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
+CNT_TAG_MATCH_U8=$(${DCK_MYSQL} --port 4900 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_u8 = hex(cast(convert(label using utf8mb4)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+32))
 fi
-CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  -u foobar -pTest+12345 --port 4900 -h 127.0.0.1 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
+CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  --port 4900 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_L1" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+1024))
@@ -571,7 +572,7 @@ do
     then
 	FAIL=$((FAIL+1))
     fi
-    ${DCK_MYSQL_DUMP} -u foobar -pTest+12345  --port 4900 -h 127.0.0.1 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_copy_${T}.sql" 2>/dev/null
+    ${DCK_MYSQL_DUMP} --port 4900 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact foobar "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR_T121}/mysqldump_foobar_copy_${T}.sql" 2>/dev/null
 done
 for T in $LIST_TABLES
 do
@@ -608,6 +609,29 @@ then
     echo "Test 132: failure ($FAIL)" && exit 132
 fi
 echo "Test 132: ok ( $? )"
+
+
+# test 140  copy whole database sql into postgress => count rows in foobar / check ticket_tag.label 
+eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=8100 -dst-user=admin -dst-pwd=Test+12345 -dst-driver postgres -dst-db paradump        $DEBUG_CMD " || { echo "Test 140: failure" ; exit 140 ; }
+FAIL=0
+for T in $LIST_TABLES
+do
+    CNT=$(${DCK_PSQL} --port 8100 -c "select count(*) as cnt from foobar.$T ;" 2>/dev/null | sed 's/^cnt: //p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8100  -c "select 'cnt_match ',count(*) as cnt_match  from foobar.ticket_tag where upper(encode(convert_to(label,'UTF8'),'hex')) = label_postgres_hex_u8 ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
+then
+    FAIL=$((FAIL+32))
+fi
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 140: failure ($FAIL)" && exit 140
+fi
+echo "Test 140: ok ( $? )"
 
 rm -rf "$TMPDIR_T100"
 rm -rf "$TMPDIR_T110"
