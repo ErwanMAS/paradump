@@ -616,13 +616,13 @@ eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema 
 FAIL=0
 for T in $LIST_TABLES
 do
-    CNT=$(${DCK_PSQL} --port 8100 -c "select count(*) as cnt from foobar.$T ;" 2>/dev/null | sed 's/^cnt: //p;d')
+    CNT=$(${DCK_PSQL} --port 8100 -c "select 'cnt',count(*) as cnt from foobar.$T ;" 2>/dev/null | sed 's/^cnt *: *\([^ ]\)/\1/p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
     fi
 done
-CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8100  -c "select 'cnt_match ',count(*) as cnt_match  from foobar.ticket_tag where upper(encode(convert_to(label,'UTF8'),'hex')) = label_postgres_hex_u8 ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
+CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8100  -c "select 'cnt_match',count(*) as cnt_match  from foobar.ticket_tag where upper(encode(convert_to(label,'UTF8'),'hex')) = label_postgres_hex_u8 ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
 if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
     FAIL=$((FAIL+32))
