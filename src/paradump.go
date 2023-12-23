@@ -24,6 +24,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/microsoft/go-mssqldb"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -549,6 +550,148 @@ func GetDstPostgresConnections(DbHost string, DbPort int, DbUsername string, DbU
 }
 
 // ------------------------------------------------------------------------------------------
+func GetaSynchronizedMsSqlConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, StatMysqlSession, error) {
+	// https://github.com/microsoft/go-mssqldb#parameters
+	// https://github.com/microsoft/go-mssqldb#the-connection-string-can-be-specified-in-one-of-three-formats
+	// sqlserver://username:password@host:port?param1=value&param2=value
+	db, err := sql.Open("sqlserver", fmt.Sprintf("postgres://%s@%s:%s:%d/%s?sslmode=disable", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
+	if err != nil {
+		log.Print("can not create a postgres object")
+		log.Fatal(err.Error())
+	}
+	db.SetMaxOpenConns(TargetCount * 3)
+	db.SetMaxIdleConns(TargetCount * 3)
+	// --------------------
+	var ctx context.Context
+	ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
+	// --------------------
+	db_conns := make([]*sql.Conn, TargetCount*3)
+	for i := 0; i < TargetCount*3; i++ {
+		first_conn, err := db.Conn(ctx)
+		if err != nil {
+			log.Print("can not open a mysql connection")
+			log.Fatal(err.Error())
+		}
+		db_conns[i] = first_conn
+	}
+	// --------------------------------------------------------------------------
+	globallockchan := make(chan bool)
+	globalposchan := make(chan InfoMysqlPosition)
+	resultreadchan := make(chan InfoMysqlSession, TargetCount*3-1)
+	startreadchan := make(chan bool, TargetCount*3-1)
+	syncreadchan := make(chan int, TargetCount*3-1)
+	// -------------------------------------------
+	for i := 1; i < TargetCount*3; i++ {
+		go MysqlLockTableStartConsistenRead(resultreadchan, i, db_conns[i], startreadchan, syncreadchan)
+	}
+	// --------------------
+	// we wait for TargetCount*3-1  feedback - ready to start a transaction
+	for i := 1; i < TargetCount*3; i++ {
+		<-syncreadchan
+	}
+	log.Print("everyone is ready")
+	// --------------------
+	// we start the read lock
+	go MysqlLockTableWaitRelease(globallockchan, db_conns[0], globalposchan)
+	<-globallockchan
+	log.Print("ok for global lock")
+	// --------------------
+	// we wake all read
+	for i := 1; i < TargetCount*3; i++ {
+		startreadchan <- true
+	}
+	// --------------------
+	// we wait for TargetCount*3-1  feedback - a read trasnsaction is started
+	for i := 1; i < TargetCount*3; i++ {
+		<-syncreadchan
+	}
+	// --------------------
+	// we release the global lock
+	globallockchan <- true
+	log.Print("ok as for release the global lock")
+	// --------------------------------------------------------------------------
+	var stats_ses []StatMysqlSession
+	db_sessions_filepos := make([]InfoMysqlSession, TargetCount*3-1)
+	<-globallockchan
+	masterpos := <-globalposchan
+	for i := 1; i < TargetCount*3; i++ {
+		db_sessions_filepos[i-1] = <-resultreadchan
+		foundidx := -1
+		for j := 0; j < len(stats_ses); j++ {
+			if foundidx == -1 && stats_ses[j].FileName == db_sessions_filepos[i-1].Position.Name && stats_ses[j].FilePos == db_sessions_filepos[i-1].Position.Pos {
+				stats_ses[j].Cnt++
+				foundidx = j
+			}
+		}
+		if foundidx == -1 {
+			stats_ses = append(stats_ses, StatMysqlSession{Cnt: 1, FileName: db_sessions_filepos[i-1].Position.Name, FilePos: db_sessions_filepos[i-1].Position.Pos})
+		}
+	}
+	// --------------------
+	log.Printf("we collected infos about %d sessions differents postions count is %d", len(db_sessions_filepos), len(stats_ses))
+	foundRefPos := -1
+	for j := 0; foundRefPos == -1 && j < len(stats_ses); j++ {
+		if stats_ses[j].Cnt >= TargetCount {
+			foundRefPos = j
+		}
+	}
+	// --------------------
+	log.Printf("we choose session with pos %s@%d", stats_ses[foundRefPos].FileName, stats_ses[foundRefPos].FilePos)
+	if mode_debug {
+		log.Printf("master position was %s@%d", masterpos.Name, masterpos.Pos)
+	}
+	// --------------------
+	if masterpos.Name != stats_ses[foundRefPos].FileName || stats_ses[foundRefPos].FilePos != masterpos.Pos {
+		log.Fatal(" we choose a session that have a different position than the first session ")
+	}
+	// --------------------
+	var ret_dbconns []*sql.Conn
+	if foundRefPos >= 0 {
+		for i := 0; i < TargetCount*3-1; i++ {
+			if db_sessions_filepos[i].Position.Name == stats_ses[foundRefPos].FileName && db_sessions_filepos[i].Position.Pos == stats_ses[foundRefPos].FilePos && len(ret_dbconns) < TargetCount {
+				ret_dbconns = append(ret_dbconns, db_conns[db_sessions_filepos[i].cnxId])
+				db_conns[db_sessions_filepos[i].cnxId] = nil
+			}
+		}
+	}
+	for i := 0; i < TargetCount*3; i++ {
+		if db_conns[i] != nil {
+			db_conns[i].Close()
+		}
+	}
+	// --------------------
+	return db, ret_dbconns, stats_ses[foundRefPos], nil
+}
+
+// ------------------------------------------------------------------------------------------
+func GetDstMsSqlConnections(DbHost string, DbPort int, DbUsername string, DbUserPassword string, TargetCount int, ConDatabase string) (*sql.DB, []*sql.Conn, error) {
+	// https://github.com/microsoft/go-mssqldb#the-connection-string-can-be-specified-in-one-of-three-formats
+	// sqlserver://username:password@host:port?param1=value&param2=value
+	db, err := sql.Open("sqlserver", fmt.Sprintf("sqlserver://%s:%s@%s:%d/?encrypt=disable&REPLICATION=TRUE&DATABASE=%s", DbUsername, DbUserPassword, DbHost, DbPort, ConDatabase))
+	if err != nil {
+		log.Print("can not create a MsSql object")
+		log.Fatal(err.Error())
+	}
+	db.SetMaxOpenConns(TargetCount)
+	db.SetMaxIdleConns(TargetCount)
+	// --------------------
+	var ctx context.Context
+	ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
+	// --------------------
+	db_conns := make([]*sql.Conn, TargetCount)
+	for i := 0; i < TargetCount; i++ {
+		first_conn, err := db.Conn(ctx)
+		if err != nil {
+			log.Print("can not open a MsSql connection")
+			log.Fatal(err.Error())
+		}
+		db_conns[i] = first_conn
+	}
+	// --------------------
+	return db, db_conns, nil
+}
+
+// ------------------------------------------------------------------------------------------
 type columnInfo struct {
 	colName      string
 	colType      string
@@ -846,6 +989,130 @@ func GetPostgresBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName st
 }
 
 // ------------------------------------------------------------------------------------------
+func GetMsSqlBasicMetadataInfo(adbConn *sql.Conn, dbName string, tableName string) (MetadataTable, bool) {
+	var result MetadataTable
+	result.dbName = dbName
+	result.tbName = tableName
+	result.fakePrimaryKey = false
+	result.onError = 0
+	result.isEmpty = true
+	result.withTrigger = false
+
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	p_err := adbConn.PingContext(ctx)
+	if p_err != nil {
+		log.Fatalf("can not ping\n%s", p_err.Error())
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows, q_err := adbConn.QueryContext(ctx, "SELECT      SUM(a.total_pages) * 8 AS TotalSpaceKB, max(p.rows), 'UNKNOW',is_t.TABLE_TYPE "+
+		"            from information_schema.tables is_t "+
+		"            join sys.tables t on is_t.TABLE_NAME = t.name "+
+		"		INNER JOIN sys.indexes i ON t.object_id = i.object_id "+
+		"		INNER JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id "+
+		"		INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id "+
+		"		LEFT OUTER JOIN sys.schemas s ON t.schema_id = s.schema_id and s.name=is_t.table_schema "+
+		"		WHERE "+
+		"		      is_t.table_schema= @p1 and is_t.table_name=@p2 "+
+		"		GROUP BY is_t.TABLE_TYPE , is_t.table_schema , is_t.table_name  ", dbName, tableName)
+	if q_err != nil {
+		log.Fatalf("can not query information_schema.tables for %s.%s\n%s", dbName, tableName, q_err.Error())
+	}
+	typeTable := "DO_NOT_EXIST"
+	for q_rows.Next() {
+		err := q_rows.Scan(&result.sizeBytes, &result.cntRows, &result.storageEng, &typeTable)
+		if err != nil {
+			log.Printf("can not scan for query information_schema.tables for %s.%s", dbName, tableName)
+			log.Fatal(err.Error())
+		}
+		if typeTable != "BASE TABLE" {
+			result.onError = result.onError | 8
+		}
+	}
+	if typeTable == "DO_NOT_EXIST" {
+		result.onError = result.onError | 16
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+	q_rows, q_err = adbConn.QueryContext(ctx, "select COLUMN_NAME , DATA_TYPE,IS_NULLABLE,COALESCE(DATETIME_PRECISION,-9999),COALESCE(numeric_precision,-9999) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = $1 AND table_name = $2 order by ORDINAL_POSITION ", dbName, tableName)
+	if q_err != nil {
+		log.Fatalf("can not query information_schema.columns for %s.%s\n%s", dbName, tableName, q_err.Error())
+	}
+	for q_rows.Next() {
+		var a_col columnInfo
+		var a_str string
+		err := q_rows.Scan(&a_col.colName, &a_col.colType, &a_str, &a_col.dtPrec, &a_col.nuPrec)
+		if err != nil {
+			log.Print("can not scan columns informations")
+			log.Fatal(err.Error())
+		}
+		a_col.isNullable = (a_str == "YES")
+		a_col.isKindChar = (a_col.colType == "character varying")
+		a_col.isKindBinary = (a_col.colType == "bytea")
+		a_col.mustBeQuote = a_col.isKindChar || a_col.isKindBinary || (a_col.colType == "date" || a_col.colType == "timestamp without time zone" || a_col.colType == "time" || a_col.colType == "timestamp with time zone")
+		a_col.isKindFloat = (a_col.colType == "real" || a_col.colType == "double precision")
+		a_col.haveFract = (a_col.colType == "timestamp without time zone" || a_col.colType == "timestamp with time zone" || a_col.colType == "time") && (a_col.dtPrec > 0)
+		result.columnInfos = append(result.columnInfos, a_col)
+	}
+	ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+	q_rows, q_err = adbConn.QueryContext(ctx,
+		" SELECT column_name as PRIMARYKEYCOLUMN FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS TC INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS KU ON TC.CONSTRAINT_TYPE = 'PRIMARY KEY'  AND TC.CONSTRAINT_NAME = KU.CONSTRAINT_NAME AND KU.table_name=@P2 AND KU.TABLE_SCHEMA=@P1 ",
+		dbName, tableName)
+	if q_err != nil {
+		log.Fatalf("can not query INFORMATION_SCHEMA.TABLE_CONSTRAINTS to get primary key info for %s.%s\n%s", dbName, tableName, q_err.Error())
+	}
+	for q_rows.Next() {
+		var a_str string
+		err := q_rows.Scan(&a_str)
+		if err != nil {
+			log.Print("can not scan primary key informations")
+			log.Fatal(err.Error())
+		}
+		result.primaryKey = append(result.primaryKey, a_str)
+	}
+
+	// ---------------------------------------------------------------------------------
+	result.fullName = fmt.Sprintf("%s.%s", result.dbName, result.tbName)
+	result.cntCols = len(result.columnInfos)
+	// ---------------------------------------------------------------------------------
+	if result.onError == 0 {
+		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+
+		q_rows, q_err = adbConn.QueryContext(ctx, fmt.Sprintf("select top 1 1 from %s ", result.fullName))
+		if q_err != nil {
+			log.Fatalf("can not query the table %s for one row\n", result.fullName, q_err.Error())
+		}
+		for q_rows.Next() {
+			var a_bigint uint64
+			err := q_rows.Scan(&a_bigint)
+			if err != nil {
+				log.Printf("can not scan a simple value from %s", result.fullName)
+				log.Fatal(err.Error())
+			}
+			result.isEmpty = false
+		}
+		// -------------------------------------------------------------------------
+		ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+		q_rows, q_err = adbConn.QueryContext(ctx, "SELECT count(*) FROM sys.triggers tr INNER JOIN sys.tables t INNER JOIn sys.schemas s ON t.schema_id = s.schema_id ON t.object_id = tr.parent_id WHERE  s.name = @P1 and t.name=@P2", dbName, tableName)
+		if q_err != nil {
+			log.Fatalf("can not query INFORMATION_SCHEMA.TRIGGERS to detect trigger for table %s (%s) ", result.fullName, q_err.Error())
+		}
+		for q_rows.Next() {
+			var a_bigint uint64
+			err := q_rows.Scan(&a_bigint)
+			if err != nil {
+				log.Printf("can not scan count from INFORMATION_SCHEMA.TRIGGERS for table %s", result.fullName)
+				log.Fatal(err.Error())
+			}
+			result.withTrigger = a_bigint > 0
+		}
+		// -------------------------------------------------------------------------
+	}
+	// ---------------------------------------------------------------------------------
+	return result, true
+}
+
+// ------------------------------------------------------------------------------------------
 func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, guessPk bool, dumpmode string, dumpinsertwithcol string, srcdriver string, dstdriver string) (MetadataTable, bool) {
 	result, _ := GetMysqlBasicMetadataInfo(adbConn, dbName, tableName)
 
@@ -1008,7 +1275,11 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 		if dstdriver == "postgres" {
 			result.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", result.dbName, result.tbName, generateListCols4Sql(result.columnInfos, false))
 		} else {
-			result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
+			if dstdriver == "mssql" {
+				result.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", result.dbName, result.tbName, generateListCols4Sql(result.columnInfos, false))
+			} else {
+				result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
+			}
 		}
 	} else {
 		if dumpinsertwithcol == "full" {
@@ -1140,7 +1411,11 @@ func CheckTableOnDestination(driver string, adbConn *sql.Conn, a_table MetadataT
 	if driver == "mysql" {
 		dstinfo, _ = GetMysqlBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
 	} else {
-		dstinfo, _ = GetPostgresBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+		if driver == "mssql" {
+			dstinfo, _ = GetMsSqlBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+		} else {
+			dstinfo, _ = GetPostgresBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+		}
 	}
 	res := reflect.DeepEqual(a_table.columnInfos, dstinfo.columnInfos)
 	err_msg := ""
@@ -2030,6 +2305,123 @@ func quoteStringFromPosPostgres(s_ptr *string, s_len int, b_pos int, new_char by
 }
 
 // ------------------------------------------------------------------------------------------
+// mssql : we need only to quote the single quote
+var quote_substitute_string_mssql = [256]uint8{
+	//    1    2    3    4     5    6   7    8    9    A    B    C    D    E    F
+	'C', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'C', 'A', 'A', 'C', 'A', 'A', // 0x00-0x0F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'C', 'A', 'A', 'A', 'A', 'A', // 0x10-0x1F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'C', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', // 0x20-0x2F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', // 0x30-0x3F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', // 0x40-0x4F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', // 0x50-0x5F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', // 0x60-0x6F
+	'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', // 0x70-0x7F
+	//    1    2    3    4     5    6    7    8    9    A    B     C    D    E    F
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0x80-0x8F
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0x90-0x9F
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0xA0-0xAF
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0xB0-0xBF
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0xC0-0xCF
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0xD0-0xDF
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0xE0-0xEF
+	'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', // 0xF0-0xFF
+}
+
+func stringIsASCII(s_ptr *string) bool {
+	s_len := len(*s_ptr)
+	if s_len == 0 {
+		return true
+	}
+	b_pos := 0
+	var new_char byte
+	for {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string_mssql[first_char]
+		if new_char != 'A' {
+			return false
+		}
+		b_pos++
+		if b_pos == s_len {
+			return true
+		}
+	}
+}
+
+func needCopyForquoteStringMsSql(s_ptr *string) (*string, int, int, byte) {
+	s_len := len(*s_ptr)
+	if s_len == 0 {
+		return s_ptr, 0, -1, 0
+	}
+	b_pos := 0
+	var new_char byte
+	for {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string_mssql[first_char]
+		if new_char != 'A' {
+			return s_ptr, s_len, b_pos, new_char
+		}
+		b_pos++
+		if b_pos == s_len {
+			return s_ptr, s_len, -1, 0
+		}
+	}
+}
+
+func quoteStringFromPosMsSql(s_ptr *string, s_len int, b_pos int, new_char byte) (*string, int) {
+	var new_str strings.Builder
+	need_plus := false
+	mode_n := false
+	new_str.WriteString((*s_ptr)[:b_pos])
+	if new_char == 'C' {
+		new_str.WriteString(fmt.Sprintf("'+CHAR(%d)", (*s_ptr)[b_pos]))
+		need_plus = true
+	}
+	if new_char == 'U' {
+		new_str.WriteString("'+N'")
+		new_str.WriteByte((*s_ptr)[b_pos])
+		need_plus = false
+		mode_n = true
+	}
+	b_pos++
+	for b_pos < s_len {
+		first_char := (*s_ptr)[b_pos]
+		new_char = quote_substitute_string_mssql[first_char]
+		if new_char == 'A' {
+			if need_plus {
+				new_str.WriteString("+'")
+				need_plus = false
+			}
+			new_str.WriteByte(first_char)
+		} else if new_char == 'C' {
+			if need_plus {
+				new_str.WriteString(fmt.Sprintf("+CHAR(%d)", new_char))
+			} else {
+				new_str.WriteString(fmt.Sprintf("'+CHAR(%d)", new_char))
+			}
+			need_plus = true
+			mode_n = false
+		} else if new_char == 'U' {
+			if need_plus {
+				new_str.WriteString("+N'")
+				need_plus = false
+			} else {
+				if !mode_n {
+					new_str.WriteString("'+N'")
+					mode_n = true
+				}
+				new_str.WriteByte(first_char)
+			}
+		}
+		b_pos++
+	}
+	if need_plus {
+		new_str.WriteString("+'")
+	}
+	n_str := new_str.String()
+	return &n_str, len(n_str)
+}
+
+// ------------------------------------------------------------------------------------------
 type cachedataChunkGenerator struct {
 	table_id     int
 	lastusagecnt int
@@ -2217,6 +2609,23 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						b_siz += cell_size + 7 + 2 + 7
 						arr_ind -= arr_ind_inc
 					}
+				} else if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "mssql" {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+						cell := a_dta_chunk.rows[j].cols[n]
+						if !cell.Valid {
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
+						}
+						s_ptr := hex.EncodeToString([]byte(cell.String))
+						cell_size := len(s_ptr)
+						lastTable.buf_arr[arr_ind].kind = 2
+						lastTable.buf_arr[arr_ind].val = &s_ptr
+						// 23 for sys.fn_cdc_hexstrtobin( 2 for 0x 2 for for quote and 1 for )
+						b_siz += cell_size + 23 + 2 + 2 + 1
+						arr_ind -= arr_ind_inc
+					}
 				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mysql" {
 					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
 						cell := a_dta_chunk.rows[j].cols[n]
@@ -2255,6 +2664,30 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						}
 						lastTable.buf_arr[arr_ind].val = s_ptr
 						arr_ind -= arr_ind_inc
+					}
+				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mssql" {
+					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+						cell := a_dta_chunk.rows[j].cols[n]
+						if !cell.Valid {
+							lastTable.buf_arr[arr_ind].kind = -1
+							b_siz += 4
+							arr_ind -= arr_ind_inc
+							continue
+						}
+						if !stringIsASCII(&cell.String) {
+							s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringMsSql(&cell.String)
+							if need_quote != -1 {
+								s_ptr, cell_size = quoteStringFromPosMsSql(&cell.String, cell_size, need_quote, new_char)
+							}
+							lastTable.buf_arr[arr_ind].kind = 1
+							b_siz += cell_size + 2
+							lastTable.buf_arr[arr_ind].val = s_ptr
+							arr_ind -= arr_ind_inc
+						} else {
+							lastTable.buf_arr[arr_ind].kind = 1
+							lastTable.buf_arr[arr_ind].val = &cell.String
+							arr_ind -= arr_ind_inc
+						}
 					}
 				} else if lastTable.tab_meta.columnInfos[n].isKindFloat {
 					var f_prec uint = 24
@@ -2313,6 +2746,10 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						b.WriteString("_binary '")
 						b.WriteString(*a_cell.val)
 						b.WriteString("'")
+					} else if dst_driver == "mssql" {
+						b.WriteString("sys.fn_cdc_hexstrtobin('0x")
+						b.WriteString(*a_cell.val)
+						b.WriteString("')")
 					} else {
 						b.WriteString("decode('")
 						b.WriteString(*a_cell.val)
@@ -2759,7 +3196,7 @@ func main() {
 	arg_trace := flag.Bool("trace", false, "trace mode")
 	arg_loop := flag.Int("loopcnt", 1, "how many times we are going to loop (for debugging)")
 	// ----------------------------------------------------------------------------------
-	arg_db_driver := flag.String("driver", "mysql", "SQL engine , mysql / postgres")
+	arg_db_driver := flag.String("driver", "mysql", "SQL engine , mysql / postgres / mssql")
 	arg_db_port := flag.Int("port", 3306, "the database port")
 	arg_db_host := flag.String("host", "127.0.0.1", "the database host")
 	arg_db_user := flag.String("user", "mysql", "the database connection user")
@@ -2778,8 +3215,8 @@ func main() {
 	arg_dumpcompress_level := flag.Int("dumpcompresslevel", 1, "which zstd compression level ( 1 , 3 , 6 , 11 ) ")
 	arg_dumpcompress_concur := flag.Int("dumpcompressconcur", 4, "which zstd compression concurency ")
 	// ------------
-	arg_db_name := flag.String("db", "", "the database to connect ( postgres only) ")
-	arg_dst_db_name := flag.String("dst-db", "", "the database to connect ( postgres only) ")
+	arg_db_name := flag.String("db", "", "the database to connect ( postgres & msqsql only) ")
+	arg_dst_db_name := flag.String("dst-db", "", "the database to connect ( postgres & mssql only) ")
 	// ------------
 	var arg_schemas arrayFlags
 	flag.Var(&arg_schemas, "schema", "schema(s) of tables to dump")
@@ -2793,7 +3230,7 @@ func main() {
 	arg_guess_pk := flag.Bool("guessprimarykey", false, "guess a primary key in case table does not have one")
 	arg_all_tables := flag.Bool("alltables", false, "all tables of the specified database")
 	// ------------
-	arg_dst_db_driver := flag.String("dst-driver", "mysql", "SQL engine , mysql / postgres")
+	arg_dst_db_driver := flag.String("dst-driver", "mysql", "SQL engine , mysql / postgres / mssql ")
 	arg_dst_db_port := flag.Int("dst-port", 3306, "the database port")
 	arg_dst_db_host := flag.String("dst-host", "127.0.0.1", "the database host")
 	arg_dst_db_user := flag.String("dst-user", "mysql", "the database connection user")
@@ -2876,11 +3313,11 @@ func main() {
 		flag.Usage()
 		os.Exit(17)
 	}
-	if len(*arg_db_name) == 0 && (*arg_db_driver == "postgres") {
+	if len(*arg_db_name) == 0 && ((*arg_db_driver == "postgres") || (*arg_db_driver == "mssql")) {
 		flag.Usage()
 		os.Exit(18)
 	}
-	if len(*arg_dst_db_name) == 0 && (*arg_dst_db_driver == "postgres") {
+	if len(*arg_dst_db_name) == 0 && ((*arg_dst_db_driver == "postgres") || (*arg_dst_db_driver == "mssql")) {
 		flag.Usage()
 		os.Exit(19)
 	}
@@ -2929,12 +3366,18 @@ func main() {
 	if *arg_db_driver == "mysql" {
 		dbSrc, conSrc, _, _ = GetaSynchronizedMysqlConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
 	}
+	if *arg_db_driver == "mssql" {
+		dbSrc, conSrc, _, _ = GetaSynchronizedMsSqlConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
+	}
 	if *arg_db_driver == "postgres" {
 		dbSrc, conSrc, _, _ = GetaSynchronizedPostgresConnections(*arg_db_host, *arg_db_port, *arg_db_user, *arg_db_pasw, cntReader+cntBrowser, arg_schemas[0])
 	}
 	if *arg_dumpmode == "cpy" {
 		if *arg_dst_db_driver == "mysql" {
 			dbDst, conDst, _ = GetDstMysqlConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_schemas[0])
+		}
+		if *arg_dst_db_driver == "mssql" {
+			dbDst, conDst, _ = GetDstMsSqlConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, *arg_dst_db_name)
 		}
 		if *arg_dst_db_driver == "postgres" {
 			dbDst, conDst, _ = GetDstPostgresConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, *arg_dst_db_name)

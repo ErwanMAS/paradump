@@ -32,7 +32,7 @@ docker ps -a -q >/dev/null 2>&1 || {
 DCK_MYSQL="$NEED_SUDO docker run --rm --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysql -u foobar -pTest+12345 -h 127.0.0.1 "
 DCK_MYSQL_DUMP="$NEED_SUDO docker run --rm --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysqldump -u foobar -pTest+12345 -h 127.0.0.1 "
 DCK_PSQL="$NEED_SUDO docker run --rm --network=host -e PGPASSWORD=Test+12345 -i bitnami/postgresql:11-debian-11 psql -h 127.0.0.1 -U admin -d paradump -qAt -F: "
-
+DCK_MSSQL="$NEED_SUDO docker run --rm --network=host      -i mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools/bin/sqlcmd -U admin -d paradump -P Test+12345   -S 127.0.0.1"
 # ------------------------------------------------------------------------------------------
 # tables that have binary or line return that will prevent to use CSV
 #
@@ -62,6 +62,8 @@ truncate_tables() {
 	    ${DCK_MYSQL} --port 4900 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	    ${DCK_MYSQL} --port 4000 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	    ${DCK_PSQL}  --port 8100        -c "truncate table foobar.$T ;" >/dev/null 2>&1 &
+	    # shellcheck disable=SC2086
+	    ${DCK_MSSQL},8300               -Q "truncate table foobar.$T  " >/dev/null 2>&1 &
 	    wait
 	done
     )
@@ -633,6 +635,30 @@ then
     echo "Test 140: failure ($FAIL)" && exit 140
 fi
 echo "Test 140: ok ( $? )"
+
+# test 150  copy whole database sql into postgress => count rows in foobar / check ticket_tag.label 
+eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=8300 -dst-user=admin -dst-pwd=Test+12345 -dst-driver mssql    -dst-db paradump        $DEBUG_CMD " || { echo "Test 150: failure" ; exit 150 ; }
+FAIL=0
+for T in $LIST_TABLES
+do
+    CNT=$(${DCK_PSQL} --port 8100 -c "select 'cnt',count(*) as cnt from foobar.$T ;" 2>/dev/null | sed 's/^cnt *: *\([^ ]\)/\1/p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+# shellcheck disable=SC2086
+CNT_TAG_MATCH_U8=$(${DCK_MSSQL},8300  -Q "select 'cnt_match',count(*) as cnt_match  from foobar.ticket_tag where convert(varchar(max),CAST(label as varbinary(256)),2) = label_hex_u16le ;"  2>/dev/null | sed 's/^cnt_match *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
+then
+    FAIL=$((FAIL+32))
+fi
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 150: failure ($FAIL)" && exit 150
+fi
+echo "Test 150: ok ( $? )"
+
 
 rm -rf "$TMPDIR_T100"
 rm -rf "$TMPDIR_T110"
