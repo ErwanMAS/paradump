@@ -190,6 +190,18 @@ then
 	fi
 	if [[ "$SFT" = "postgres" ]]
 	then
+	    if [[ "$NAM" = "postgres_source" ]]
+	    then
+	        (
+		cat <<-'EOF'
+		CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+		CREATE OR REPLACE FUNCTION sha256(bytea) returns  bytea  AS $$
+		    SELECT digest($1, 'sha256') 
+		$$ LANGUAGE SQL STRICT IMMUTABLE;
+		EOF
+		) | $NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump
+	    fi
 	    for DB in foobar barfoo test
 	    do
 		$NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump -c " create schema $DB ; "
@@ -329,9 +341,9 @@ then
 				# shellcheck disable=SC2086,SC2016,SC2031,SC2030
 				if [[ $TAB = "account_metadatas" ]]
 				then
-				    ( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/GO\nINSERT INTO '$DB'.\1/;s/INSERT INTO \([^\. ]*\) VA/GO\nINSERT INTO '$DB'.\1 VA/' | sed 's/),(/),\n(/g'   | sed "s|,0x\([0-9A-F][0-9A-F]*\),|,sys.fn_cdc_hexstrtobin('0x\1'),|g" ) | $NEED_SUDO docker exec  -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+				    ( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/GO\nINSERT INTO '$DB'.\1/;s/INSERT INTO \([^\. ]*\) VA/GO\nINSERT INTO '$DB'.\1 VA/' | sed 's/),(/),\n(/g'   | sed "s|,0x\([0-9A-F][0-9A-F]*\),|,convert(varbinary(max),'\1',2),|g" ) | $NEED_SUDO docker exec  -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
 				else
-				    ( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/GO\nINSERT INTO '$DB'.\1/;s/INSERT INTO \([^\. ]*\) VA/GO\nINSERT INTO '$DB'.\1 VA/' | sed 's/),(/),\n(/g' ) |                                                                         $NEED_SUDO docker exec  -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
+				    ( time zstd -dc "${D}" | ( export LC_ALL=C ; sed 's/INSERT INTO `\([^`]*\)`/GO\nINSERT INTO '$DB'.\1/;s/INSERT INTO \([^\. ]*\) VA/GO\nINSERT INTO '$DB'.\1 VA/' | sed 's/),(/),\n(/g' ) |                                                                            $NEED_SUDO docker exec  -i  $CONTAINER_DST $CNT_EXE  ) 2>&1
 				fi
 			    fi
 			fi
@@ -496,7 +508,7 @@ do
 	fi
 	if [[ "$ENGINE" = "postgres" ]]
 	then
-	    ENV_CMD="PGOPTIONS=-c search_path=$DB"
+	    ENV_CMD="FOOBAR=foobar"
 	    CNT_EXE="psql -qAt -F, -h localhost -U admin -d paradump"
 	fi
 	if [[ "$ENGINE" = "mssql" ]]
@@ -507,9 +519,12 @@ do
 	for D in mysql:ticket_tag:"label_hex_u8 <> hex(cast(convert(label using utf8mb4)  as binary))" \
 		 mysql:ticket_tag:"label_hex_u16 <> hex(cast(convert(label using utf16)  as binary))" \
 		 mysql:ticket_tag:"label_hex_l1 <> hex(cast(convert(label using latin1 )  as binary))" \
-		 mysql:sensor_tag:"cast( hex(label) as char character set latin1 ) <>  hex_label"   \
 		 postgres:ticket_tag:"upper(encode(convert_to(label,'UTF8'),'hex')) <> label_postgres_hex_u8" \
-		 mssql:ticket_tag:"convert(varchar(max),CAST(label as varbinary(256)),2) <> label_hex_u16le"
+		 mssql:ticket_tag:"convert(varchar(max),CAST(label as varbinary(256)),2) <> label_hex_u16le" \
+		 mysql:sensor_tag:"cast( hex(label) as char character set latin1 ) <>  hex_label"   \
+		 mysql:account_metadatas:"metasha256 <> sha2(metavalue,256)" \
+		 postgres:account_metadatas:"metasha256 <> encode(sha256(metavalue),'hex')" \
+		 mssql:account_metadatas:"metasha256 <> LOWER(CONVERT(VARCHAR(MAX),HASHBYTES('SHA2_256',metavalue),2))"
 	do
 	    ENG=$( echo "$D"  | cut -d: -f1 )
 	    if [[ "$ENG" == "$ENGINE" ]]

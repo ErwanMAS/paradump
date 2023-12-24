@@ -2622,7 +2622,8 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						cell_size := len(s_ptr)
 						lastTable.buf_arr[arr_ind].kind = 2
 						lastTable.buf_arr[arr_ind].val = &s_ptr
-						// 23 for sys.fn_cdc_hexstrtobin( 2 for 0x 2 for for quote and 1 for )
+						// convert(varbinary(max),'HXHXHXHHXHXHX',2)
+						//      23 + 2 for for quote  + 3 for ,2)
 						b_siz += cell_size + 23 + 2 + 2 + 1
 						arr_ind -= arr_ind_inc
 					}
@@ -2747,9 +2748,9 @@ func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []Metad
 						b.WriteString(*a_cell.val)
 						b.WriteString("'")
 					} else if dst_driver == "mssql" {
-						b.WriteString("sys.fn_cdc_hexstrtobin('0x")
+						b.WriteString("convert(varbinary(max),'")
 						b.WriteString(*a_cell.val)
-						b.WriteString("')")
+						b.WriteString("',2)")
 					} else {
 						b.WriteString("decode('")
 						b.WriteString(*a_cell.val)
