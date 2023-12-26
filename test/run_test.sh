@@ -11,6 +11,7 @@ sleep_1_sec() {
 }
 trap sleep_1_sec EXIT
 # ------------------------------------------------------------------------------------------
+TRUNCATE_TABLE_ONLY=0
 SMALL_TESTS_ONLY=0
 DEBUG_CMD=">/dev/null 2>&1"
 while [ -n "$1" ]
@@ -25,6 +26,12 @@ do
 	if [[ "$1" = "--small-tests" ]]
 	then
 	    SMALL_TESTS_ONLY=1
+	    shift
+	    continue
+	fi
+	if [[ "$1" = "--truncate-tables" ]]
+	then
+	    TRUNCATE_TABLE_ONLY=1
 	    shift
 	    continue
 	fi
@@ -90,7 +97,10 @@ truncate_tables() {
 echo "Init   0:"
 
 truncate_tables
-
+if [ "$TRUNCATE_TABLE_ONLY" -eq 1 ]
+then
+    exit 0
+fi    
 echo "Check  0:"
 # order in loops matter's because 4000/foobar is the reference 
 for port in 4900 4000
