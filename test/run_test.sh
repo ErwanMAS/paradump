@@ -5,17 +5,32 @@ cd "$(dirname "$0")" || exit 200
 exec &> >( while read -r L ; do echo "$(date '+%b %d %T')" "$L" ; done )
 
 BINARY=../src/paradump
-
 # ------------------------------------------------------------------------------------------
-
+sleep_1_sec() {
+    sleep 1
+}
+trap sleep_1_sec EXIT
+# ------------------------------------------------------------------------------------------
+SMALL_TESTS_ONLY=0
 DEBUG_CMD=">/dev/null 2>&1"
-
-if [[ "$1" = "--debug" ]]
-then
-    set -x
-    DEBUG_CMD=""
-fi
-
+while [ -n "$1" ]
+do
+	if [[ "$1" = "--debug" ]]
+	then
+	    set -x
+	    DEBUG_CMD=""
+	    shift
+	    continue
+	fi
+	if [[ "$1" = "--small-tests" ]]
+	then
+	    SMALL_TESTS_ONLY=1
+	    shift
+	    continue
+	fi
+	echo "ERROR ARG '$1' is invalid"
+	exit 203
+done
 # ------------------------------------------------------------------------------------------
 
 NEED_SUDO=""
@@ -473,7 +488,10 @@ then
 fi
 echo "Test 106: ok ( $? )"
 
-
+if [ $SMALL_TESTS_ONLY -eq 1 ]
+then
+    exit 0
+fi
 truncate_tables
 
 # test 110  dump whole database csv with no header => count lines
@@ -648,7 +666,7 @@ fi
 CNT_TAG_MATCH_L1=$(${DCK_MYSQL}  --port 4900 foobar -e "select count(*) as cnt_match  from ticket_tag where label_hex_l1 = hex(cast(convert(label using latin1)  as binary)) \G" 2>/dev/null | sed 's/^cnt_match: //p;d'  )
 if [[ "$CNT_TAG_MATCH_L1" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
 then
-    FAIL=$((FAIL+1024))
+    FAIL=$((FAIL+64))
 fi
 if [[ "$FAIL" -gt 0 ]]
 then

@@ -2432,481 +2432,482 @@ type cachedataChunkGenerator struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGenerator(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, dumpmode string, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
-	if dumpmode == "sql" || dumpmode == "cpy" {
-		// ------------------------------------------------------------------
-		// we use a array of string to generate the final sql insert
-		//
-		//   row 1 |   insert into (   | col1  | , |  col2 | , | ....   | coln
-		//   row 2 |   ) , (           | col1  | , |  col2 | , | ....   | coln
-		//   row 3 |   ) , (           | col1  | , |  col2 | , | ....   | coln
-		//   row 4 |   ) , (           | col1  | , |  col2 | , | ....   | coln
-		//   end   |   ) ; \n
-		//
-		//    4 rows with n cols => 4*n*2 + 1
-		//
-		//  echo row need 1           prefix
-		//                cntCols     for value
-		//                cntCols - 1 for coma
-		//  and a final   suffix
-		//
-		//  total cells => insert_size x ( tab_meta.cntCols * 2 ) cells + 1
-		//
-		// ------------------------------------------------------------------
-		nullStr := "NULL"
-		betwStr := "),("
-		endStr := ");\n"
+	// we use a array of string to generate the final sql insert
+	//
+	//   row 1 |   insert into (   | col1  | , |  col2 | , | ....   | coln
+	//   row 2 |   ) , (           | col1  | , |  col2 | , | ....   | coln
+	//   row 3 |   ) , (           | col1  | , |  col2 | , | ....   | coln
+	//   row 4 |   ) , (           | col1  | , |  col2 | , | ....   | coln
+	//   end   |   ) ; \n
+	//
+	//    4 rows with n cols => 4*n*2 + 1
+	//
+	//  echo row need 1           prefix
+	//                cntCols     for value
+	//                cntCols - 1 for coma
+	//  and a final   suffix
+	//
+	//  total cells => insert_size x ( tab_meta.cntCols * 2 ) cells + 1
+	//
+	// ----------------------------------------------------------------------------------
+	nullStr := "NULL"
+	betwStr := "),("
+	endStr := ");\n"
 
-		var cntgenechunk int = 0
-		var last_hit int = 0
-		var cache_hit int = 0
-		var cache_miss int = 0
+	var cntgenechunk int = 0
+	var last_hit int = 0
+	var cache_hit int = 0
+	var cache_miss int = 0
 
-		var tabGenVars []*cachedataChunkGenerator
-		var lastTable *cachedataChunkGenerator
+	var tabGenVars []*cachedataChunkGenerator
+	var lastTable *cachedataChunkGenerator
 
-		tabGenVars = make([]*cachedataChunkGenerator, cntBrowser+1)
+	tabGenVars = make([]*cachedataChunkGenerator, cntBrowser+1)
 
-		// ------------------------------------------------------------------
-		for {
-			a_dta_chunk := <-rowvalueschan
-			if mode_debug {
-				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d usedlen %5d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, a_dta_chunk.usedlen)
-			}
-			if a_dta_chunk.table_id == -1 {
-				break
-			}
-			cntgenechunk++
+	// ----------------------------------------------------------------------------------
+	for {
+		a_dta_chunk := <-rowvalueschan
+		if mode_debug {
+			log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d usedlen %5d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, a_dta_chunk.usedlen)
+		}
+		if a_dta_chunk.table_id == -1 {
+			break
+		}
+		cntgenechunk++
 
-			if lastTable != nil && lastTable.table_id == a_dta_chunk.table_id {
-				last_hit++
-			} else {
-				// --------------------------------------------------
-				var tab_found int = -1
-				var empty_slot int = -1
-				var lru_slot int = -1
-				var lru_val int = math.MaxInt
-				for n := range tabGenVars {
-					if tabGenVars[n] == nil {
-						empty_slot = n
-					} else if tabGenVars[n].table_id == a_dta_chunk.table_id {
-						tab_found = n
-						break
-					} else {
-						if tabGenVars[n].lastusagecnt < lru_val {
-							lru_val = tabGenVars[n].lastusagecnt
-							lru_slot = n
-						}
+		if lastTable != nil && lastTable.table_id == a_dta_chunk.table_id {
+			last_hit++
+		} else {
+			// ------------------------------------------------------------------
+			var tab_found int = -1
+			var empty_slot int = -1
+			var lru_slot int = -1
+			var lru_val int = math.MaxInt
+			for n := range tabGenVars {
+				if tabGenVars[n] == nil {
+					empty_slot = n
+				} else if tabGenVars[n].table_id == a_dta_chunk.table_id {
+					tab_found = n
+					break
+				} else {
+					if tabGenVars[n].lastusagecnt < lru_val {
+						lru_val = tabGenVars[n].lastusagecnt
+						lru_slot = n
 					}
 				}
-				if tab_found > -1 {
-					cache_hit++
-					lastTable = tabGenVars[tab_found]
-					lastTable.lastusagecnt = cntgenechunk
-					cache_miss++
-				} else {
-					if empty_slot == -1 {
-						empty_slot = lru_slot
-					}
-					var new_info cachedataChunkGenerator
-					tabGenVars[empty_slot] = &new_info
-					lastTable = &new_info
-					// -----------------------------------------
-					lastTable.table_id = a_dta_chunk.table_id
-					// -----------------------------------------
-					lastTable.tab_meta = &tableInfos[lastTable.table_id]
-					// -----------------------------------------
-					lastTable.buf_arr = make([]colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
-					// -----------------------------------------
-					u_ind := 0
-					coma_str := ","
-					pad_beg_size := 0
-					pad_mid_size := 0 //  will be repeat =>  cnt rows -1
-					pad_end_size := 0
-					// -----------------------------------------
-					// row 1
-					lastTable.buf_arr[u_ind].val = &lastTable.tab_meta.query_for_insert
+			}
+			if tab_found > -1 {
+				cache_hit++
+				lastTable = tabGenVars[tab_found]
+				lastTable.lastusagecnt = cntgenechunk
+				cache_miss++
+			} else {
+				if empty_slot == -1 {
+					empty_slot = lru_slot
+				}
+				var new_info cachedataChunkGenerator
+				tabGenVars[empty_slot] = &new_info
+				lastTable = &new_info
+				// ----------------------------------------------------------
+				lastTable.table_id = a_dta_chunk.table_id
+				// ----------------------------------------------------------
+				lastTable.tab_meta = &tableInfos[lastTable.table_id]
+				// ----------------------------------------------------------
+				lastTable.buf_arr = make([]colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
+				// ----------------------------------------------------------
+				u_ind := 0
+				coma_str := ","
+				pad_beg_size := 0
+				pad_mid_size := 0 //  will be repeat =>  cnt rows -1
+				pad_end_size := 0
+				// ----------------------------------------------------------
+				// row 1
+				lastTable.buf_arr[u_ind].val = &lastTable.tab_meta.query_for_insert
+				lastTable.buf_arr[u_ind].kind = 0
+				pad_beg_size += len(lastTable.tab_meta.query_for_insert)
+				u_ind += 2
+				for c := 1; c < lastTable.tab_meta.cntCols; c++ {
+					lastTable.buf_arr[u_ind].val = &coma_str
 					lastTable.buf_arr[u_ind].kind = 0
-					pad_beg_size += len(lastTable.tab_meta.query_for_insert)
+					pad_beg_size += 1
+					u_ind += 2
+				}
+				if insert_size > 1 {
+					// --------------------------------------------------
+					// row 2
+					lastTable.buf_arr[u_ind].val = &betwStr
+					lastTable.buf_arr[u_ind].kind = 0
+					pad_mid_size += len(betwStr)
 					u_ind += 2
 					for c := 1; c < lastTable.tab_meta.cntCols; c++ {
 						lastTable.buf_arr[u_ind].val = &coma_str
 						lastTable.buf_arr[u_ind].kind = 0
-						pad_beg_size += 1
+						pad_mid_size += 1
 						u_ind += 2
 					}
-					if insert_size > 1 {
-						// -----------------------------------------
-						// row 2
-						lastTable.buf_arr[u_ind].val = &betwStr
-						lastTable.buf_arr[u_ind].kind = 0
-						pad_mid_size += len(betwStr)
-						u_ind += 2
-						for c := 1; c < lastTable.tab_meta.cntCols; c++ {
-							lastTable.buf_arr[u_ind].val = &coma_str
+					// --------------------------------------------------
+					for r := 2; r < insert_size; r++ {
+						for c := 0; c < lastTable.tab_meta.cntCols; c++ {
+							r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
+							lastTable.buf_arr[u_ind].val = lastTable.buf_arr[r_ind].val
 							lastTable.buf_arr[u_ind].kind = 0
-							pad_mid_size += 1
 							u_ind += 2
 						}
-						// -----------------------------------------
-						for r := 2; r < insert_size; r++ {
-							for c := 0; c < lastTable.tab_meta.cntCols; c++ {
-								r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
-								lastTable.buf_arr[u_ind].val = lastTable.buf_arr[r_ind].val
-								lastTable.buf_arr[u_ind].kind = 0
-								u_ind += 2
-							}
-						}
-						// -----------------------------------------
 					}
-					lastTable.buf_arr[u_ind].val = &endStr
-					lastTable.buf_arr[u_ind].kind = 0
-					pad_end_size += len(endStr)
-					// -----------------------------------------
-					lastTable.init_size = pad_beg_size + pad_end_size
-					lastTable.pad_row_size = pad_mid_size
+					// --------------------------------------------------
 				}
+				lastTable.buf_arr[u_ind].val = &endStr
+				lastTable.buf_arr[u_ind].kind = 0
+				pad_end_size += len(endStr)
+				// ----------------------------------------------------------
+				lastTable.init_size = pad_beg_size + pad_end_size
+				lastTable.pad_row_size = pad_mid_size
 			}
-
-			last_cell_pos := a_dta_chunk.usedlen * 2 * lastTable.tab_meta.cntCols
-			b_siz := lastTable.init_size + (a_dta_chunk.usedlen-1)*lastTable.pad_row_size
-
-			for n := 0; n < lastTable.tab_meta.cntCols; n++ {
-				arr_ind := 1 + n*2 + (a_dta_chunk.usedlen-1)*2*lastTable.tab_meta.cntCols
-				arr_ind_inc := 2 * lastTable.tab_meta.cntCols
-				// -------------------------------------------------
-				if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "mysql" {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						s_ptr, cell_size := quoteBinary(&cell.String)
-						lastTable.buf_arr[arr_ind].kind = 2
-						lastTable.buf_arr[arr_ind].val = s_ptr
-						// 7 for _binary and 1 for space and 2 for quotes
-						b_siz += cell_size + 7 + 1 + 2
-						arr_ind -= arr_ind_inc
-					}
-				} else if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "postgres" {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						s_ptr := hex.EncodeToString([]byte(cell.String))
-						cell_size := len(s_ptr)
-						lastTable.buf_arr[arr_ind].kind = 2
-						lastTable.buf_arr[arr_ind].val = &s_ptr
-						// 7 for decode( and 2 for quotes and 7 for ,'hex')
-						b_siz += cell_size + 7 + 2 + 7
-						arr_ind -= arr_ind_inc
-					}
-				} else if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "mssql" {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						s_ptr := hex.EncodeToString([]byte(cell.String))
-						cell_size := len(s_ptr)
-						lastTable.buf_arr[arr_ind].kind = 2
-						lastTable.buf_arr[arr_ind].val = &s_ptr
-						// convert(varbinary(max),'HXHXHXHHXHXHX',2)
-						//      23 + 2 for for quote  + 3 for ,2)
-						b_siz += cell_size + 23 + 2 + 2 + 1
-						arr_ind -= arr_ind_inc
-					}
-				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mysql" {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringMysql(&cell.String)
-						if need_quote != -1 {
-							s_ptr, cell_size = quoteStringFromPosMysql(&cell.String, cell_size, need_quote, new_char)
-						}
-						b_siz += cell_size + 2
-						lastTable.buf_arr[arr_ind].kind = 1
-						lastTable.buf_arr[arr_ind].val = s_ptr
-						arr_ind -= arr_ind_inc
-					}
-				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "postgres" {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringPostgres(&cell.String)
-						if need_quote != -1 {
-							s_ptr, cell_size = quoteStringFromPosPostgres(&cell.String, cell_size, need_quote, new_char)
-							lastTable.buf_arr[arr_ind].kind = 3
-							b_siz += cell_size + 3
-						} else {
-							lastTable.buf_arr[arr_ind].kind = 1
-							b_siz += cell_size + 2
-						}
-						lastTable.buf_arr[arr_ind].val = s_ptr
-						arr_ind -= arr_ind_inc
-					}
-				} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mssql" {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						if !stringIsASCII(&cell.String) {
-							s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringMsSql(&cell.String)
-							if need_quote != -1 {
-								s_ptr, cell_size = quoteStringFromPosMsSql(&cell.String, cell_size, need_quote, new_char)
-							}
-							lastTable.buf_arr[arr_ind].kind = 1
-							b_siz += cell_size + 2
-							lastTable.buf_arr[arr_ind].val = s_ptr
-							arr_ind -= arr_ind_inc
-						} else {
-							lastTable.buf_arr[arr_ind].kind = 1
-							lastTable.buf_arr[arr_ind].val = &cell.String
-							arr_ind -= arr_ind_inc
-						}
-					}
-				} else if lastTable.tab_meta.columnInfos[n].isKindFloat {
-					var f_prec uint = 24
-					if lastTable.tab_meta.columnInfos[n].colType == "double" {
-						f_prec = 53
-					}
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						f := new(big.Float).SetPrec(f_prec)
-						f.SetString(cell.String)
-						v := f.Text('f', -1)
-						b_siz += len(v)
-						lastTable.buf_arr[arr_ind].kind = 0
-						lastTable.buf_arr[arr_ind].val = &v
-						arr_ind -= arr_ind_inc
-					}
-				} else {
-					for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
-						cell := a_dta_chunk.rows[j].cols[n]
-						if !cell.Valid {
-							lastTable.buf_arr[arr_ind].kind = -1
-							b_siz += 4
-							arr_ind -= arr_ind_inc
-							continue
-						}
-						lastTable.buf_arr[arr_ind].kind = 0
-						lastTable.buf_arr[arr_ind].val = &cell.String
-						b_siz += len(cell.String)
-						arr_ind -= arr_ind_inc
-					}
-				}
-				// --------------------------------------------------
-			}
-			// ----------------------------------------------------------
-			var b strings.Builder
-			b.Grow(b_siz)
-			for n := range lastTable.buf_arr[:last_cell_pos] {
-				a_cell := lastTable.buf_arr[n]
-				switch a_cell.kind {
-				case -1:
-					b.WriteString(nullStr)
-				case 0:
-					b.WriteString(*a_cell.val)
-				case 1:
-					b.WriteString("'")
-					b.WriteString(*a_cell.val)
-					b.WriteString("'")
-				case 2:
-					if dst_driver == "mysql" {
-						b.WriteString("_binary '")
-						b.WriteString(*a_cell.val)
-						b.WriteString("'")
-					} else if dst_driver == "mssql" {
-						b.WriteString("convert(varbinary(max),'")
-						b.WriteString(*a_cell.val)
-						b.WriteString("',2)")
-					} else {
-						b.WriteString("decode('")
-						b.WriteString(*a_cell.val)
-						b.WriteString("','hex')")
-					}
-				case 3:
-					b.WriteString("E'")
-					b.WriteString(*a_cell.val)
-					b.WriteString("'")
-				}
-			}
-			b.WriteString(endStr)
-			a_str := b.String()
-			if mode_trace {
-				log.Printf("%s", a_str)
-			}
-			if mode_debug {
-				if len(a_str) != b_siz {
-					log.Printf("[%02d] dataChunkGenerator bad estimation real %d vs esti %d", id, len(a_str), b_siz)
-				}
-			}
-			// ----------------------------------------------------------
-			if mode_debug {
-				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... sql len is %6d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, len(a_str))
-			}
-			sql2inject <- insertchunk{table_id: lastTable.table_id, chunk_id: a_dta_chunk.chunk_id, sql: &a_str}
-			if mode_debug {
-				log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... ok sql2inject", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id)
-			}
-			// ----------------------------------------------------------
 		}
-	}
-	// --------------------------------------------------------------------------
-	if dumpmode == "csv" {
-		// ------------------------------------------------------------------
-		var buf_arr []*string
-		var last_table_id int = -1
-		var tab_meta *MetadataTable
-		// ------------------------------------------------------------------
-		a_dta_chunk := <-rowvalueschan
-		for {
-			if a_dta_chunk.table_id == -1 {
-				break
-			}
-			if last_table_id != a_dta_chunk.table_id {
-				last_table_id = a_dta_chunk.table_id
-				tab_meta = &tableInfos[last_table_id]
-				// -------------------------------------------------
-				// we use a array of string to generate the final csv
-				//
-				//   row 1 | col1  | , |  col2 | , | ....   | coln | <return line>
-				//   row 2 | col1  | , |  col2 | , | ....   | coln | <return line>
-				//   row 3 | col1  | , |  col2 | , | ....   | coln | <return line>
-				//   row 4 | col1  | , |  col2 | , | ....   | coln | <return line>
-				//
-				//    4 rows with n cols => 4*cols*2
-				//
-				//  echo row need cntCols     for value
-				//                cntCols - 1 for sep
-				//                1           for line break
-				//
-				//  total cells => insert_size x ( tab_meta.cntCols * 2 ) cells
-				//
-				buf_arr = make([]*string, insert_size*2*tab_meta.cntCols)
-				coma_str := ","
-				eol_str := "\n"
-				b_ind := 1
-				for r := 0; r < insert_size; r++ {
-					for c := 1; c < tab_meta.cntCols; c++ {
-						buf_arr[b_ind] = &coma_str
-						b_ind += 2
+
+		last_cell_pos := a_dta_chunk.usedlen * 2 * lastTable.tab_meta.cntCols
+		b_siz := lastTable.init_size + (a_dta_chunk.usedlen-1)*lastTable.pad_row_size
+
+		for n := 0; n < lastTable.tab_meta.cntCols; n++ {
+			arr_ind := 1 + n*2 + (a_dta_chunk.usedlen-1)*2*lastTable.tab_meta.cntCols
+			arr_ind_inc := 2 * lastTable.tab_meta.cntCols
+			// ------------------------------------------------------------------
+			if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "mysql" {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
 					}
-					buf_arr[b_ind] = &eol_str
+					s_ptr, cell_size := quoteBinary(&cell.String)
+					lastTable.buf_arr[arr_ind].kind = 2
+					lastTable.buf_arr[arr_ind].val = s_ptr
+					// 7 for _binary and 1 for space and 2 for quotes
+					b_siz += cell_size + 7 + 1 + 2
+					arr_ind -= arr_ind_inc
+				}
+			} else if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "postgres" {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					s_ptr := hex.EncodeToString([]byte(cell.String))
+					cell_size := len(s_ptr)
+					lastTable.buf_arr[arr_ind].kind = 2
+					lastTable.buf_arr[arr_ind].val = &s_ptr
+					// 7 for decode( and 2 for quotes and 7 for ,'hex')
+					b_siz += cell_size + 7 + 2 + 7
+					arr_ind -= arr_ind_inc
+				}
+			} else if lastTable.tab_meta.columnInfos[n].isKindBinary && dst_driver == "mssql" {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					s_ptr := hex.EncodeToString([]byte(cell.String))
+					cell_size := len(s_ptr)
+					lastTable.buf_arr[arr_ind].kind = 2
+					lastTable.buf_arr[arr_ind].val = &s_ptr
+					// convert(varbinary(max),'HXHXHXHHXHXHX',2)
+					//      23 + 2 for for quote  + 3 for ,2)
+					b_siz += cell_size + 23 + 2 + 2 + 1
+					arr_ind -= arr_ind_inc
+				}
+			} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mysql" {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringMysql(&cell.String)
+					if need_quote != -1 {
+						s_ptr, cell_size = quoteStringFromPosMysql(&cell.String, cell_size, need_quote, new_char)
+					}
+					b_siz += cell_size + 2
+					lastTable.buf_arr[arr_ind].kind = 1
+					lastTable.buf_arr[arr_ind].val = s_ptr
+					arr_ind -= arr_ind_inc
+				}
+			} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "postgres" {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringPostgres(&cell.String)
+					if need_quote != -1 {
+						s_ptr, cell_size = quoteStringFromPosPostgres(&cell.String, cell_size, need_quote, new_char)
+						lastTable.buf_arr[arr_ind].kind = 3
+						b_siz += cell_size + 3
+					} else {
+						lastTable.buf_arr[arr_ind].kind = 1
+						b_siz += cell_size + 2
+					}
+					lastTable.buf_arr[arr_ind].val = s_ptr
+					arr_ind -= arr_ind_inc
+				}
+			} else if lastTable.tab_meta.columnInfos[n].mustBeQuote && dst_driver == "mssql" {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					if !stringIsASCII(&cell.String) {
+						s_ptr, cell_size, need_quote, new_char := needCopyForquoteStringMsSql(&cell.String)
+						if need_quote != -1 {
+							s_ptr, cell_size = quoteStringFromPosMsSql(&cell.String, cell_size, need_quote, new_char)
+						}
+						lastTable.buf_arr[arr_ind].kind = 1
+						b_siz += cell_size + 2
+						lastTable.buf_arr[arr_ind].val = s_ptr
+						arr_ind -= arr_ind_inc
+					} else {
+						lastTable.buf_arr[arr_ind].kind = 1
+						lastTable.buf_arr[arr_ind].val = &cell.String
+						arr_ind -= arr_ind_inc
+					}
+				}
+			} else if lastTable.tab_meta.columnInfos[n].isKindFloat {
+				var f_prec uint = 24
+				if lastTable.tab_meta.columnInfos[n].colType == "double" {
+					f_prec = 53
+				}
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					f := new(big.Float).SetPrec(f_prec)
+					f.SetString(cell.String)
+					v := f.Text('f', -1)
+					b_siz += len(v)
+					lastTable.buf_arr[arr_ind].kind = 0
+					lastTable.buf_arr[arr_ind].val = &v
+					arr_ind -= arr_ind_inc
+				}
+			} else {
+				for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind -= arr_ind_inc
+						continue
+					}
+					lastTable.buf_arr[arr_ind].kind = 0
+					lastTable.buf_arr[arr_ind].val = &cell.String
+					b_siz += len(cell.String)
+					arr_ind -= arr_ind_inc
+				}
+			}
+			// ------------------------------------------------------------------
+		}
+		// --------------------------------------------------------------------------
+		var b strings.Builder
+		b.Grow(b_siz)
+		for n := range lastTable.buf_arr[:last_cell_pos] {
+			a_cell := lastTable.buf_arr[n]
+			switch a_cell.kind {
+			case -1:
+				b.WriteString(nullStr)
+			case 0:
+				b.WriteString(*a_cell.val)
+			case 1:
+				b.WriteString("'")
+				b.WriteString(*a_cell.val)
+				b.WriteString("'")
+			case 2:
+				if dst_driver == "mysql" {
+					b.WriteString("_binary '")
+					b.WriteString(*a_cell.val)
+					b.WriteString("'")
+				} else if dst_driver == "mssql" {
+					b.WriteString("convert(varbinary(max),'")
+					b.WriteString(*a_cell.val)
+					b.WriteString("',2)")
+				} else {
+					b.WriteString("decode('")
+					b.WriteString(*a_cell.val)
+					b.WriteString("','hex')")
+				}
+			case 3:
+				b.WriteString("E'")
+				b.WriteString(*a_cell.val)
+				b.WriteString("'")
+			}
+		}
+		b.WriteString(endStr)
+		a_str := b.String()
+		if mode_trace {
+			log.Printf("%s", a_str)
+		}
+		if mode_debug {
+			if len(a_str) != b_siz {
+				log.Printf("[%02d] dataChunkGenerator bad estimation real %d vs esti %d", id, len(a_str), b_siz)
+			}
+		}
+		// --------------------------------------------------------------------------
+		if mode_debug {
+			log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... sql len is %6d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, len(a_str))
+		}
+		sql2inject <- insertchunk{table_id: lastTable.table_id, chunk_id: a_dta_chunk.chunk_id, sql: &a_str}
+		if mode_debug {
+			log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... ok sql2inject", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id)
+		}
+		// --------------------------------------------------------------------------
+	}
+	// ----------------------------------------------------------------------------------
+}
+
+// ------------------------------------------------------------------------------------------
+func dataChunkGeneratorCsv(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+	// ----------------------------------------------------------------------------------
+	var buf_arr []*string
+	var last_table_id int = -1
+	var tab_meta *MetadataTable
+	// ----------------------------------------------------------------------------------
+	a_dta_chunk := <-rowvalueschan
+	for {
+		if a_dta_chunk.table_id == -1 {
+			break
+		}
+		if last_table_id != a_dta_chunk.table_id {
+			last_table_id = a_dta_chunk.table_id
+			tab_meta = &tableInfos[last_table_id]
+			// ------------------------------------------------------------------
+			// we use a array of string to generate the final csv
+			//
+			//   row 1 | col1  | , |  col2 | , | ....   | coln | <return line>
+			//   row 2 | col1  | , |  col2 | , | ....   | coln | <return line>
+			//   row 3 | col1  | , |  col2 | , | ....   | coln | <return line>
+			//   row 4 | col1  | , |  col2 | , | ....   | coln | <return line>
+			//
+			//    4 rows with n cols => 4*cols*2
+			//
+			//  echo row need cntCols     for value
+			//                cntCols - 1 for sep
+			//                1           for line break
+			//
+			//  total cells => insert_size x ( tab_meta.cntCols * 2 ) cells
+			//
+			buf_arr = make([]*string, insert_size*2*tab_meta.cntCols)
+			coma_str := ","
+			eol_str := "\n"
+			b_ind := 1
+			for r := 0; r < insert_size; r++ {
+				for c := 1; c < tab_meta.cntCols; c++ {
+					buf_arr[b_ind] = &coma_str
 					b_ind += 2
 				}
+				buf_arr[b_ind] = &eol_str
+				b_ind += 2
 			}
-			// ----------------------------------------------------------
-			nullStr := "\\N"
-			emptStr := ""
-			b_siz := a_dta_chunk.usedlen * tab_meta.cntCols
-			// ----------------------------------------------------------
-			for n := 0; n < tab_meta.cntCols; n++ {
-				b_ind := n * 2
-				b_ind_inc := 2 * tab_meta.cntCols
-				// -------------------------------------------------
-				if tab_meta.columnInfos[n].haveFract {
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
-						if !a_dta_chunk.rows[j].cols[n].Valid {
-							buf_arr[b_ind] = &emptStr
-						} else {
-							timeSec, timeFract, dotFound := strings.Cut(a_dta_chunk.rows[j].cols[n].String, ".")
-							if dotFound {
-								timeFract = strings.TrimRight(timeFract, "0")
-								if len(timeFract) == 1 {
-									timeFract = timeFract + "0"
-								}
-								a_str := timeSec + "." + timeFract
-								buf_arr[b_ind] = &a_str
-							} else {
-								buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
+		}
+		// --------------------------------------------------------------------------
+		nullStr := "\\N"
+		emptStr := ""
+		b_siz := a_dta_chunk.usedlen * tab_meta.cntCols
+		// --------------------------------------------------------------------------
+		for n := 0; n < tab_meta.cntCols; n++ {
+			b_ind := n * 2
+			b_ind_inc := 2 * tab_meta.cntCols
+			// ------------------------------------------------------------------
+			if tab_meta.columnInfos[n].haveFract {
+				for j := 0; j < a_dta_chunk.usedlen; j++ {
+					if !a_dta_chunk.rows[j].cols[n].Valid {
+						buf_arr[b_ind] = &emptStr
+					} else {
+						timeSec, timeFract, dotFound := strings.Cut(a_dta_chunk.rows[j].cols[n].String, ".")
+						if dotFound {
+							timeFract = strings.TrimRight(timeFract, "0")
+							if len(timeFract) == 1 {
+								timeFract = timeFract + "0"
 							}
-							b_siz += len(*buf_arr[b_ind])
-						}
-						b_ind += b_ind_inc
-					}
-				} else if tab_meta.columnInfos[n].mustBeQuote && (tab_meta.columnInfos[n].isKindChar || tab_meta.columnInfos[n].isKindBinary) {
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
-						if !a_dta_chunk.rows[j].cols[n].Valid {
-							buf_arr[b_ind] = &nullStr
-							b_siz += 2
-						} else {
-							if needQuoteForCsv(&a_dta_chunk.rows[j].cols[n].String) {
-								a_str := "\"" + strings.ReplaceAll(a_dta_chunk.rows[j].cols[n].String, "\"", "\"\"") + "\""
-								buf_arr[b_ind] = &a_str
-							} else {
-								buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
-							}
-							b_siz += len(*buf_arr[b_ind])
-						}
-						b_ind += b_ind_inc
-					}
-				} else {
-					for j := 0; j < a_dta_chunk.usedlen; j++ {
-						if !a_dta_chunk.rows[j].cols[n].Valid {
-							buf_arr[b_ind] = &emptStr
+							a_str := timeSec + "." + timeFract
+							buf_arr[b_ind] = &a_str
 						} else {
 							buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
-							b_siz += len(*buf_arr[b_ind])
 						}
-						b_ind += b_ind_inc
+						b_siz += len(*buf_arr[b_ind])
 					}
+					b_ind += b_ind_inc
 				}
-				// -------------------------------------------------
+			} else if tab_meta.columnInfos[n].mustBeQuote && (tab_meta.columnInfos[n].isKindChar || tab_meta.columnInfos[n].isKindBinary) {
+				for j := 0; j < a_dta_chunk.usedlen; j++ {
+					if !a_dta_chunk.rows[j].cols[n].Valid {
+						buf_arr[b_ind] = &nullStr
+						b_siz += 2
+					} else {
+						if needQuoteForCsv(&a_dta_chunk.rows[j].cols[n].String) {
+							a_str := "\"" + strings.ReplaceAll(a_dta_chunk.rows[j].cols[n].String, "\"", "\"\"") + "\""
+							buf_arr[b_ind] = &a_str
+						} else {
+							buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
+						}
+						b_siz += len(*buf_arr[b_ind])
+					}
+					b_ind += b_ind_inc
+				}
+			} else {
+				for j := 0; j < a_dta_chunk.usedlen; j++ {
+					if !a_dta_chunk.rows[j].cols[n].Valid {
+						buf_arr[b_ind] = &emptStr
+					} else {
+						buf_arr[b_ind] = &a_dta_chunk.rows[j].cols[n].String
+						b_siz += len(*buf_arr[b_ind])
+					}
+					b_ind += b_ind_inc
+				}
 			}
-			var b strings.Builder
-			b.Grow(b_siz)
-			for n := range buf_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols] {
-				b.WriteString(*buf_arr[n])
-			}
-			j_str := b.String()
-			sql2inject <- insertchunk{table_id: last_table_id, sql: &j_str}
-			// ----------------------------------------------------------
-			a_dta_chunk = <-rowvalueschan
+			// -----------------------------------------------------------------
 		}
+		var b strings.Builder
+		b.Grow(b_siz)
+		for n := range buf_arr[:a_dta_chunk.usedlen*2*tab_meta.cntCols] {
+			b.WriteString(*buf_arr[n])
+		}
+		j_str := b.String()
+		sql2inject <- insertchunk{table_id: last_table_id, sql: &j_str}
+		// --------------------------------------------------------------------------
+		a_dta_chunk = <-rowvalueschan
 	}
-	// --------------------------------------------------------------------------
-	if dumpmode == "nul" {
-		// ------------------------------------------------------------------
-		a_dta_chunk := <-rowvalueschan
-		for {
-			if a_dta_chunk.table_id == -1 {
-				break
-			}
-			// ----------------------------------------------------------
-			a_dta_chunk = <-rowvalueschan
+	// ----------------------------------------------------------------------------------
+}
+
+// ------------------------------------------------------------------------------------------
+func dataChunkGeneratorNul(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+	// ----------------------------------------------------------------------------------
+	a_dta_chunk := <-rowvalueschan
+	for {
+		if a_dta_chunk.table_id == -1 {
+			break
 		}
+		// --------------------------------------------------------------------------
+		a_dta_chunk = <-rowvalueschan
 	}
 	// ----------------------------------------------------------------------------------
 }
@@ -3473,7 +3474,15 @@ func main() {
 		wg_gen.Add(1)
 		go func(id int) {
 			defer wg_gen.Done()
-			dataChunkGenerator(sql_generator, id, r, *arg_dumpmode, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+			if *arg_dumpmode == "sql" || *arg_dumpmode == "cpy" {
+				dataChunkGeneratorSql(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+			}
+			if *arg_dumpmode == "csv" {
+				dataChunkGeneratorCsv(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+			}
+			if *arg_dumpmode == "nul" {
+				dataChunkGeneratorNul(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+			}
 		}(j)
 	}
 	// ------------
