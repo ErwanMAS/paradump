@@ -1499,6 +1499,7 @@ type insertchunk struct {
 	table_id int
 	chunk_id int64
 	sql      *string
+	params   *[]any
 }
 
 // ------------------------------------------------------------------------------------------
@@ -2432,6 +2433,255 @@ type cachedataChunkGenerator struct {
 }
 
 // ------------------------------------------------------------------------------------------
+func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+	// ----------------------------------------------------------------------------------
+	// we use a array of string to generate the final sql insert
+	//
+	//   row 1 |   insert into (   | col1  | , |  col2 | , | ....   | coln
+	//   row 2 |   ) , (           | col1  | , |  col2 | , | ....   | coln
+	//   row 3 |   ) , (           | col1  | , |  col2 | , | ....   | coln
+	//   row 4 |   ) , (           | col1  | , |  col2 | , | ....   | coln
+	//   end   |   ) ; \n
+	//
+	//    4 rows with n cols => 4*n*2 + 1
+	//
+	//  echo row need 1           prefix
+	//                cntCols     for value
+	//                cntCols - 1 for coma
+	//  and a final   suffix
+	//
+	//  total cells => insert_size x ( tab_meta.cntCols * 2 ) cells + 1
+	//
+	// ----------------------------------------------------------------------------------
+	nullStr := "NULL"
+	betwStr := "),("
+	endStr := ");\n"
+
+	var cntgenechunk int = 0
+	var last_hit int = 0
+	var cache_hit int = 0
+	var cache_miss int = 0
+
+	var tabGenVars []*cachedataChunkGenerator
+	var lastTable *cachedataChunkGenerator
+
+	tabGenVars = make([]*cachedataChunkGenerator, cntBrowser+1)
+
+	// ----------------------------------------------------------------------------------
+	for {
+		a_dta_chunk := <-rowvalueschan
+		if mode_debug {
+			log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d usedlen %5d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, a_dta_chunk.usedlen)
+		}
+		if a_dta_chunk.table_id == -1 {
+			break
+		}
+		cntgenechunk++
+
+		if lastTable != nil && lastTable.table_id == a_dta_chunk.table_id {
+			last_hit++
+		} else {
+			// ------------------------------------------------------------------
+			var tab_found int = -1
+			var empty_slot int = -1
+			var lru_slot int = -1
+			var lru_val int = math.MaxInt
+			for n := range tabGenVars {
+				if tabGenVars[n] == nil {
+					empty_slot = n
+				} else if tabGenVars[n].table_id == a_dta_chunk.table_id {
+					tab_found = n
+					break
+				} else {
+					if tabGenVars[n].lastusagecnt < lru_val {
+						lru_val = tabGenVars[n].lastusagecnt
+						lru_slot = n
+					}
+				}
+			}
+			if tab_found > -1 {
+				cache_hit++
+				lastTable = tabGenVars[tab_found]
+				lastTable.lastusagecnt = cntgenechunk
+				cache_miss++
+			} else {
+				if empty_slot == -1 {
+					empty_slot = lru_slot
+				}
+				var new_info cachedataChunkGenerator
+				tabGenVars[empty_slot] = &new_info
+				lastTable = &new_info
+				// ----------------------------------------------------------
+				lastTable.table_id = a_dta_chunk.table_id
+				// ----------------------------------------------------------
+				lastTable.tab_meta = &tableInfos[lastTable.table_id]
+				// ----------------------------------------------------------
+				lastTable.buf_arr = make([]colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
+				// ----------------------------------------------------------
+				u_ind := 0
+				coma_str := ","
+				pad_beg_size := 0
+				pad_mid_size := 0 //  will be repeat =>  cnt rows -1
+				pad_end_size := 0
+				// ----------------------------------------------------------
+				// row 1
+				lastTable.buf_arr[u_ind].val = &lastTable.tab_meta.query_for_insert
+				lastTable.buf_arr[u_ind].kind = 0
+				pad_beg_size += len(lastTable.tab_meta.query_for_insert)
+				u_ind += 2
+				for c := 1; c < lastTable.tab_meta.cntCols; c++ {
+					lastTable.buf_arr[u_ind].val = &coma_str
+					lastTable.buf_arr[u_ind].kind = 0
+					pad_beg_size += 1
+					u_ind += 2
+				}
+				if insert_size > 1 {
+					// --------------------------------------------------
+					// row 2
+					lastTable.buf_arr[u_ind].val = &betwStr
+					lastTable.buf_arr[u_ind].kind = 0
+					pad_mid_size += len(betwStr)
+					u_ind += 2
+					for c := 1; c < lastTable.tab_meta.cntCols; c++ {
+						lastTable.buf_arr[u_ind].val = &coma_str
+						lastTable.buf_arr[u_ind].kind = 0
+						pad_mid_size += 1
+						u_ind += 2
+					}
+					// --------------------------------------------------
+					for r := 2; r < insert_size; r++ {
+						for c := 0; c < lastTable.tab_meta.cntCols; c++ {
+							r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
+							lastTable.buf_arr[u_ind].val = lastTable.buf_arr[r_ind].val
+							lastTable.buf_arr[u_ind].kind = 0
+							u_ind += 2
+						}
+					}
+					// --------------------------------------------------
+				}
+				lastTable.buf_arr[u_ind].val = &endStr
+				lastTable.buf_arr[u_ind].kind = 0
+				pad_end_size += len(endStr)
+				// ----------------------------------------------------------
+				lastTable.init_size = pad_beg_size + pad_end_size
+				lastTable.pad_row_size = pad_mid_size
+			}
+		}
+		// --------------------------------------------------------------------------
+		no_null_cnt := 0
+		for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+			for n := 0; n < lastTable.tab_meta.cntCols; n++ {
+				cell := a_dta_chunk.rows[j].cols[n]
+				if cell.Valid {
+					no_null_cnt += 1
+				}
+			}
+		}
+		var sqlParams []any = make([]any, no_null_cnt)
+		// ----------------------------------------------------------
+		arr_ind := 1
+		last_cell_pos := a_dta_chunk.usedlen * 2 * lastTable.tab_meta.cntCols
+		b_siz := lastTable.init_size + (a_dta_chunk.usedlen-1)*lastTable.pad_row_size
+
+		var param_pattern string
+
+		if dst_driver == "mysql" {
+			param_pattern = "?"
+		}
+		if dst_driver == "postgres" {
+			param_pattern = "$"
+		}
+		if dst_driver == "mssql" {
+			param_pattern = "@p"
+		}
+		// ----------------------------------------------------------
+		param_pos := 0
+		if dst_driver == "mysql" {
+			for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+				for n := 0; n < lastTable.tab_meta.cntCols; n++ {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind += 2
+						continue
+					}
+					lastTable.buf_arr[arr_ind].kind = 9
+					lastTable.buf_arr[arr_ind].val = &param_pattern
+					sqlParams[param_pos] = cell.String
+					param_pos += 1
+					b_siz += 1
+					arr_ind += 2
+					continue
+				}
+			}
+		} else {
+			for j := a_dta_chunk.usedlen - 1; j >= 0; j-- {
+				for n := 0; n < lastTable.tab_meta.cntCols; n++ {
+					cell := a_dta_chunk.rows[j].cols[n]
+					if !cell.Valid {
+						lastTable.buf_arr[arr_ind].kind = -1
+						b_siz += 4
+						arr_ind += 2
+						continue
+					}
+					lastTable.buf_arr[arr_ind].kind = 9
+					str_val := param_pattern + strconv.Itoa(param_pos+1)
+					lastTable.buf_arr[arr_ind].val = &str_val
+					if lastTable.tab_meta.columnInfos[n].isKindBinary {
+						sqlParams[param_pos] = []byte(cell.String)
+					} else {
+						if dst_driver == "postgres" && strings.IndexByte(cell.String, 0) != -1 {
+							sqlParams[param_pos] = strings.ReplaceAll(cell.String, "\x00", "")
+						} else {
+							sqlParams[param_pos] = cell.String
+						}
+					}
+					param_pos += 1
+					b_siz += len(str_val)
+					arr_ind += 2
+					continue
+				}
+			}
+		}
+		// --------------------------------------------------------------------------
+		var b strings.Builder
+		b.Grow(b_siz)
+		for n := range lastTable.buf_arr[:last_cell_pos] {
+			a_cell := lastTable.buf_arr[n]
+			switch a_cell.kind {
+			case -1:
+				b.WriteString(nullStr)
+			case 0:
+				b.WriteString(*a_cell.val)
+			case 9:
+				b.WriteString(*a_cell.val)
+			}
+		}
+		b.WriteString(endStr)
+		a_str := b.String()
+		if mode_trace {
+			log.Printf("%s", a_str)
+		}
+		if mode_debug {
+			if len(a_str) != b_siz {
+				log.Printf("[%02d] dataChunkGenerator bad estimation real %d vs esti %d", id, len(a_str), b_siz)
+			}
+		}
+		// --------------------------------------------------------------------------
+		if mode_debug {
+			log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... sql len is %6d", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id, len(a_str))
+		}
+		sql2inject <- insertchunk{table_id: lastTable.table_id, chunk_id: a_dta_chunk.chunk_id, sql: &a_str, params: &sqlParams}
+		if mode_debug {
+			log.Printf("[%02d] dataChunkGenerator table %03d chunk %12d ... ok sql2inject", id, a_dta_chunk.table_id, a_dta_chunk.chunk_id)
+		}
+		// --------------------------------------------------------------------------
+	}
+	// ----------------------------------------------------------------------------------
+}
+
+// ------------------------------------------------------------------------------------------
 func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	// we use a array of string to generate the final sql insert
@@ -3155,10 +3405,19 @@ func tableCopyWriter(sql2inject chan insertchunk, adbConn *sql.Conn, id int) {
 	a_insert_sql := <-sql2inject
 	for a_insert_sql.sql != nil {
 		// --------------------------------------------------------------------------
-		_, e_err := adbConn.ExecContext(context.Background(), *a_insert_sql.sql)
-		if e_err != nil {
-			log.Printf("error with :\n%s", *a_insert_sql.sql)
-			log.Fatalf("thread %d , can not insert a chunk\n%s\n", id, e_err.Error())
+		if a_insert_sql.params != nil {
+			_, e_err := adbConn.ExecContext(context.Background(), *a_insert_sql.sql, *a_insert_sql.params...)
+			if e_err != nil {
+				log.Printf("error with :\n%s", *a_insert_sql.sql)
+				log.Printf("with params array of %d elems", len(*a_insert_sql.params))
+				log.Fatalf("thread %d , can not insert a chunk\n%s\n", id, e_err.Error())
+			}
+		} else {
+			_, e_err := adbConn.ExecContext(context.Background(), *a_insert_sql.sql)
+			if e_err != nil {
+				log.Printf("error with :\n%s", *a_insert_sql.sql)
+				log.Fatalf("thread %d , can not insert a chunk\n%s\n", id, e_err.Error())
+			}
 		}
 		// --------------------------------------------------------------------------
 		a_insert_sql = <-sql2inject
@@ -3474,7 +3733,10 @@ func main() {
 		wg_gen.Add(1)
 		go func(id int) {
 			defer wg_gen.Done()
-			if *arg_dumpmode == "sql" || *arg_dumpmode == "cpy" {
+			if *arg_dumpmode == "cpy" {
+				dataChunkGeneratorCpy(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+			}
+			if *arg_dumpmode == "sql" {
 				dataChunkGeneratorSql(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
 			}
 			if *arg_dumpmode == "csv" {
