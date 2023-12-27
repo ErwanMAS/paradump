@@ -12,6 +12,14 @@ docker ps -a -q >/dev/null 2>&1 || {
     }
     NEED_SUDO="sudo"
 }
+for EXE in jq zstd
+do
+    if ( ! which $EXE >/dev/null 2>&1 )
+    then
+	echo binary $EXE is not present
+	exit 1
+    fi
+done    
 #------------------------------------------------------------------------------------------
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
 TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
