@@ -748,6 +748,7 @@ type MetadataTable struct {
 	query_for_reader_equality      string
 	param_indices_equality_qry     []int
 	query_for_insert               string
+	insert_size                    int
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1765,10 +1766,10 @@ func ChunkReaderDumpHeader(dumpmode string, cur_iow io.Writer, sql_tab_cols stri
 }
 
 // ------------------------------------------------------------------------------------------
-func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_table_info *MetadataTable, tab_id int, chk_id int64, insert_size int, chan2gen chan datachunk) {
+func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_table_info *MetadataTable, tab_id int, chk_id int64, chan2gen chan datachunk) {
 	// --------------------------------------------------------------------------
 	var a_dta_chunk datachunk
-	a_dta_chunk = datachunk{usedlen: 0, chunk_id: chk_id, table_id: tab_id, rows: make([]*rowchunk, insert_size)}
+	a_dta_chunk = datachunk{usedlen: 0, chunk_id: chk_id, table_id: tab_id, rows: make([]*rowchunk, a_table_info.insert_size)}
 	row_cnt := 0
 	if mode_debug {
 		log.Printf("ChunkReaderDumpProcess [%02d] table %03d chunk %12d \n", threadid, tab_id, chk_id)
@@ -1791,11 +1792,11 @@ func ChunkReaderDumpProcess(threadid int, q_rows *sql.Rows, a_table_info *Metada
 		a_dta_chunk.rows[row_cnt] = &a_simple_row
 		row_cnt++
 		// ------------------------------------------------------------------
-		if row_cnt >= insert_size {
+		if row_cnt >= a_table_info.insert_size {
 			a_dta_chunk.usedlen = row_cnt
 			chan2gen <- a_dta_chunk
 			row_cnt = 0
-			a_dta_chunk = datachunk{usedlen: 0, table_id: tab_id, chunk_id: chk_id, rows: make([]*rowchunk, insert_size)}
+			a_dta_chunk = datachunk{usedlen: 0, table_id: tab_id, chunk_id: chk_id, rows: make([]*rowchunk, a_table_info.insert_size)}
 		}
 	}
 	if row_cnt > 0 {
@@ -1819,9 +1820,9 @@ type cacheTableChunkReader struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn *sql.Conn, tableInfos []MetadataTable, id int, insert_size int, cntBrowser int) {
+func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk, adbConn *sql.Conn, tableInfos []MetadataTable, id int, cntBrowser int) {
 	if mode_debug {
-		log.Printf("tableChunkReader[%02d] start with insert size %d\n", id, insert_size)
+		log.Printf("tableChunkReader[%02d] start\n", id)
 	}
 	var cntreadchunk int = 0
 	var last_hit int = 0
@@ -1935,7 +1936,7 @@ func tableChunkReader(chunk2read chan tablechunk, chan2generator chan datachunk,
 			log.Printf("ind lo: %s  ind up: %s", last_table.indices_lo_pk, last_table.indices_up_pk)
 		}
 		// --------------------------------------------------------------------------
-		ChunkReaderDumpProcess(id, q_rows, &tableInfos[last_table.table_id], last_table.table_id, a_chunk.chunk_id, insert_size, chan2generator)
+		ChunkReaderDumpProcess(id, q_rows, &tableInfos[last_table.table_id], last_table.table_id, a_chunk.chunk_id, chan2generator)
 		// --------------------------------------------------------------------------
 		if mode_debug {
 			log.Printf("table %s chunk query :  %s \n with %d params\nval for query: %s\n", last_table.fullname, *the_query, len(sql_vals_pk), sql_vals_pk)
@@ -2433,7 +2434,7 @@ type cachedataChunkGenerator struct {
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	// we use a array of string to generate the final sql insert
 	//
@@ -2516,7 +2517,7 @@ func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []Me
 				// ----------------------------------------------------------
 				lastTable.tab_meta = &tableInfos[lastTable.table_id]
 				// ----------------------------------------------------------
-				lastTable.buf_arr = make([]colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
+				lastTable.buf_arr = make([]colchunk, lastTable.tab_meta.insert_size*2*lastTable.tab_meta.cntCols+1)
 				// ----------------------------------------------------------
 				u_ind := 0
 				coma_str := ","
@@ -2535,7 +2536,7 @@ func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []Me
 					pad_beg_size += 1
 					u_ind += 2
 				}
-				if insert_size > 1 {
+				if lastTable.tab_meta.insert_size > 1 {
 					// --------------------------------------------------
 					// row 2
 					lastTable.buf_arr[u_ind].val = &betwStr
@@ -2549,7 +2550,7 @@ func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []Me
 						u_ind += 2
 					}
 					// --------------------------------------------------
-					for r := 2; r < insert_size; r++ {
+					for r := 2; r < lastTable.tab_meta.insert_size; r++ {
 						for c := 0; c < lastTable.tab_meta.cntCols; c++ {
 							r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
 							lastTable.buf_arr[u_ind].val = lastTable.buf_arr[r_ind].val
@@ -2682,7 +2683,7 @@ func dataChunkGeneratorCpy(rowvalueschan chan datachunk, id int, tableInfos []Me
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	// we use a array of string to generate the final sql insert
 	//
@@ -2765,7 +2766,7 @@ func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []Me
 				// ----------------------------------------------------------
 				lastTable.tab_meta = &tableInfos[lastTable.table_id]
 				// ----------------------------------------------------------
-				lastTable.buf_arr = make([]colchunk, insert_size*2*lastTable.tab_meta.cntCols+1)
+				lastTable.buf_arr = make([]colchunk, lastTable.tab_meta.insert_size*2*lastTable.tab_meta.cntCols+1)
 				// ----------------------------------------------------------
 				u_ind := 0
 				coma_str := ","
@@ -2784,7 +2785,7 @@ func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []Me
 					pad_beg_size += 1
 					u_ind += 2
 				}
-				if insert_size > 1 {
+				if lastTable.tab_meta.insert_size > 1 {
 					// --------------------------------------------------
 					// row 2
 					lastTable.buf_arr[u_ind].val = &betwStr
@@ -2798,7 +2799,7 @@ func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []Me
 						u_ind += 2
 					}
 					// --------------------------------------------------
-					for r := 2; r < insert_size; r++ {
+					for r := 2; r < lastTable.tab_meta.insert_size; r++ {
 						for c := 0; c < lastTable.tab_meta.cntCols; c++ {
 							r_ind := (u_ind % (lastTable.tab_meta.cntCols * 2)) + lastTable.tab_meta.cntCols*2
 							lastTable.buf_arr[u_ind].val = lastTable.buf_arr[r_ind].val
@@ -3034,7 +3035,7 @@ func dataChunkGeneratorSql(rowvalueschan chan datachunk, id int, tableInfos []Me
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGeneratorCsv(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+func dataChunkGeneratorCsv(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	var buf_arr []*string
 	var last_table_id int = -1
@@ -3064,11 +3065,11 @@ func dataChunkGeneratorCsv(rowvalueschan chan datachunk, id int, tableInfos []Me
 			//
 			//  total cells => insert_size x ( tab_meta.cntCols * 2 ) cells
 			//
-			buf_arr = make([]*string, insert_size*2*tab_meta.cntCols)
+			buf_arr = make([]*string, tab_meta.insert_size*2*tab_meta.cntCols)
 			coma_str := ","
 			eol_str := "\n"
 			b_ind := 1
-			for r := 0; r < insert_size; r++ {
+			for r := 0; r < tab_meta.insert_size; r++ {
 				for c := 1; c < tab_meta.cntCols; c++ {
 					buf_arr[b_ind] = &coma_str
 					b_ind += 2
@@ -3149,7 +3150,7 @@ func dataChunkGeneratorCsv(rowvalueschan chan datachunk, id int, tableInfos []Me
 }
 
 // ------------------------------------------------------------------------------------------
-func dataChunkGeneratorNul(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, insert_size int, dst_driver string, cntBrowser int) {
+func dataChunkGeneratorNul(rowvalueschan chan datachunk, id int, tableInfos []MetadataTable, sql2inject chan insertchunk, dst_driver string, cntBrowser int) {
 	// ----------------------------------------------------------------------------------
 	a_dta_chunk := <-rowvalueschan
 	for {
@@ -3663,6 +3664,16 @@ func main() {
 	if *arg_dumpmode == "cpy" {
 		CheckTablesOnDestination(*arg_db_driver, *arg_dst_db_driver, conDst[0], r)
 	}
+	// ---------------------------------
+	for i := 0; i < len(r); i++ {
+		r[i].insert_size = *arg_insert_size
+		if *arg_dst_db_driver == "mssql" {
+			if r[i].cntCols**arg_insert_size >= 2100 {
+				r[i].insert_size = (2100 - 1) / r[i].cntCols
+				log.Printf("we change insertsize for % from %s to %d ", r[i].fullName, *arg_insert_size, r[i].insert_size)
+			}
+		}
+	}
 	// ----------------------------------------------------------------------------------
 	if *arg_cpuprofile != "" {
 		f, err := os.Create(*arg_cpuprofile)
@@ -3721,7 +3732,7 @@ func main() {
 		wg_red.Add(1)
 		go func(adbConn *sql.Conn, id int) {
 			defer wg_red.Done()
-			tableChunkReader(pk_chunks_to_read, sql_generator, adbConn, r, id, *arg_insert_size, cntBrowser)
+			tableChunkReader(pk_chunks_to_read, sql_generator, adbConn, r, id, cntBrowser)
 		}(conSrc[j+cntBrowser], j)
 	}
 	// ------------
@@ -3734,16 +3745,16 @@ func main() {
 		go func(id int) {
 			defer wg_gen.Done()
 			if *arg_dumpmode == "cpy" {
-				dataChunkGeneratorCpy(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+				dataChunkGeneratorCpy(sql_generator, id, r, sql_to_write, *arg_dst_db_driver, cntBrowser)
 			}
 			if *arg_dumpmode == "sql" {
-				dataChunkGeneratorSql(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+				dataChunkGeneratorSql(sql_generator, id, r, sql_to_write, *arg_dst_db_driver, cntBrowser)
 			}
 			if *arg_dumpmode == "csv" {
-				dataChunkGeneratorCsv(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+				dataChunkGeneratorCsv(sql_generator, id, r, sql_to_write, *arg_dst_db_driver, cntBrowser)
 			}
 			if *arg_dumpmode == "nul" {
-				dataChunkGeneratorNul(sql_generator, id, r, sql_to_write, *arg_insert_size, *arg_dst_db_driver, cntBrowser)
+				dataChunkGeneratorNul(sql_generator, id, r, sql_to_write, *arg_dst_db_driver, cntBrowser)
 			}
 		}(j)
 	}
