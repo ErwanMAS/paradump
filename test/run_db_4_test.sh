@@ -90,11 +90,11 @@ then
     fi
     if [[ "$MEM_GB" -le 32 ]]
     then
-	MYSQL_BUF="6"
+	MYSQL_BUF="4"
     fi
     if [[ "$MEM_GB" -le 16 ]]
     then
-	MYSQL_BUF="3"
+	MYSQL_BUF="2"
     fi
     MSSQL_MEMORY_LIMIT_MB=$(( MYSQL_BUF * 1024 ))
     MYSQL_BUF="${MYSQL_BUF}G"
@@ -195,6 +195,7 @@ then
 	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
 	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
 	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
+	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_flush_log_at_trx_commit = 2 ; \"  "
 	fi
 	if [[ "$SFT" = "postgres" ]]
 	then
@@ -234,6 +235,8 @@ then
 		CREATE SCHEMA barfoo AUTHORIZATION admin
 		GO
 		CREATE SCHEMA test AUTHORIZATION admin
+		GO
+		ALTER DATABASE paradump SET DELAYED_DURABILITY = FORCED
 		GO
 		EOF
 	    ) | $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Test+12345'
@@ -295,11 +298,11 @@ then
 	    if [[ "$ENGINE" = "mysql" ]]
 	    then
 		ENV_CMD="MYSQL_PWD=Test+12345"
-		CNT_EXE="/usr/bin/mysql  -u foobar  -h localhost ${DB} "
+		CNT_EXE="/usr/bin/mysql  -u foobar -h localhost ${DB} "
 	    fi
 	    if [[ "$ENGINE" = "postgres" ]]
 	    then
-		ENV_CMD="PGOPTIONS=-c search_path=$DB"
+		ENV_CMD="PGOPTIONS=-c search_path=$DB -c synchronous_commit=off"
 		CNT_EXE="psql -q  -h localhost -U admin -d paradump"
 	    fi
 	    if [[ "$ENGINE" = "mssql" ]]
@@ -415,6 +418,32 @@ then
 	done
 	wait
     fi
+    echo "restore innodb_flush_log_at_trx_commit setting"
+    for DB in foobar barfoo
+    do
+	if [[ $DB = "barfoo" ]]
+	then
+	    CONTAINER_DST=mysql_target
+	else
+	    CONTAINER_DST=mysql_source
+	fi
+	if [ "$( $NEED_SUDO docker ps -q -fName=${CONTAINER_DST} | wc -l )" -eq 0 ]
+	then
+	    continue
+	fi
+	$NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i $CONTAINER_DST sh -c "/usr/bin/mysql  -u root -h localhost mysql -e 'set global innodb_flush_log_at_trx_commit = 2;' "
+    done
+    echo "done"
+    echo "restore DELAYED_DURABILITY setting"
+    for CONTAINER_DST in mssql_source mssql_target
+    do
+	(
+	cat <<-EOF
+	ALTER DATABASE paradump SET DELAYED_DURABILITY = DISABLED
+	GO
+	EOF
+	) | $NEED_SUDO docker exec -i $CONTAINER_DST  /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Test+12345'
+    done
     echo "done"
 fi
 #------------------------------------------------------------------------------------------
