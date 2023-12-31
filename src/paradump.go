@@ -713,12 +713,14 @@ type indexInfo struct {
 }
 
 type aTable struct {
-	dbName string
-	tbName string
+	dbName    string
+	tbName    string
+	dstDbName string
 }
 
 type MetadataTable struct {
 	dbName                         string
+	dstDbName                      string
 	tbName                         string
 	isEmpty                        bool
 	cntRows                        int64
@@ -1272,24 +1274,6 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 	result.param_indices_interval_lo_qry = qry_indices_lo_bound
 	result.param_indices_interval_up_qry = qry_indices_up_bound
 	// ---------------------------
-	if dumpmode == "cpy" {
-		if dstdriver == "postgres" {
-			result.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", result.dbName, result.tbName, generateListCols4Sql(result.columnInfos, false))
-		} else {
-			if dstdriver == "mssql" {
-				result.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", result.dbName, result.tbName, generateListCols4Sql(result.columnInfos, false))
-			} else {
-				result.query_for_insert = fmt.Sprintf("INSERT INTO %s(%s) VALUES (", result.fullName, result.listColsSQL)
-			}
-		}
-	} else {
-		if dumpinsertwithcol == "full" {
-			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s`(%s) VALUES (", result.tbName, result.listColsSQL)
-		} else {
-			result.query_for_insert = fmt.Sprintf("INSERT INTO `%s` VALUES (", result.tbName)
-		}
-	}
-	// ---------------------------
 	if mode_debug {
 		if len(enumPkCols) > 0 {
 			log.Printf(" for table %s we need to apdat query because of enum in pk.\n%s", result.fullName, result.query_for_browser_first)
@@ -1298,6 +1282,27 @@ func GetTableMetadataInfo(adbConn *sql.Conn, dbName string, tableName string, gu
 	}
 	// ---------------------------------------------------------------------------------
 	return result, true
+}
+
+// ------------------------------------------------------------------------------------------
+func PopulateDmlTemplateQuery(inf_t *MetadataTable, dumpmode string, dumpinsertwithcol string, dstdriver string) {
+	if dumpmode == "cpy" {
+		if dstdriver == "postgres" {
+			inf_t.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", inf_t.dstDbName, inf_t.tbName, generateListCols4Sql(inf_t.columnInfos, false))
+		} else {
+			if dstdriver == "mssql" {
+				inf_t.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", inf_t.dstDbName, inf_t.tbName, generateListCols4Sql(inf_t.columnInfos, false))
+			} else {
+				inf_t.query_for_insert = fmt.Sprintf("INSERT INTO %s.%s(%s) VALUES (", inf_t.dstDbName, inf_t.tbName, inf_t.listColsSQL)
+			}
+		}
+	} else {
+		if dumpinsertwithcol == "full" {
+			inf_t.query_for_insert = fmt.Sprintf("INSERT INTO `%s`(%s) VALUES (", inf_t.tbName, inf_t.listColsSQL)
+		} else {
+			inf_t.query_for_insert = fmt.Sprintf("INSERT INTO `%s` VALUES (", inf_t.tbName)
+		}
+	}
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1367,6 +1372,10 @@ func GetMetadataInfo4Tables(adbConn *sql.Conn, tableNames []aTable, guessPk bool
 	var result []MetadataTable
 	for j := 0; j < len(tableNames); j++ {
 		info, _ := GetTableMetadataInfo(adbConn, tableNames[j].dbName, tableNames[j].tbName, guessPk, dumpmode, dumpinsertwithcol, srcdriver, dstdriver)
+		if dumpmode == "cpy" {
+			info.dstDbName = tableNames[j].dstDbName
+		}
+		PopulateDmlTemplateQuery(&info, dumpmode, dumpinsertwithcol, dstdriver)
 		result = append(result, info)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].fullName < result[j].fullName })
@@ -1410,12 +1419,12 @@ func GetMetadataInfo4Tables(adbConn *sql.Conn, tableNames []aTable, guessPk bool
 func CheckTableOnDestination(driver string, adbConn *sql.Conn, a_table MetadataTable) (string, bool, int) {
 	var dstinfo MetadataTable
 	if driver == "mysql" {
-		dstinfo, _ = GetMysqlBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+		dstinfo, _ = GetMysqlBasicMetadataInfo(adbConn, a_table.dstDbName, a_table.tbName)
 	} else {
 		if driver == "mssql" {
-			dstinfo, _ = GetMsSqlBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+			dstinfo, _ = GetMsSqlBasicMetadataInfo(adbConn, a_table.dstDbName, a_table.tbName)
 		} else {
-			dstinfo, _ = GetPostgresBasicMetadataInfo(adbConn, a_table.dbName, a_table.tbName)
+			dstinfo, _ = GetPostgresBasicMetadataInfo(adbConn, a_table.dstDbName, a_table.tbName)
 		}
 	}
 	res := reflect.DeepEqual(a_table.columnInfos, dstinfo.columnInfos)
@@ -1424,8 +1433,8 @@ func CheckTableOnDestination(driver string, adbConn *sql.Conn, a_table MetadataT
 	if !res {
 		err_msg = fmt.Sprintf("columns definitions are not identical for %s", a_table.fullName)
 		if mode_debug {
-			log.Print(a_table.columnInfos)
-			log.Print(dstinfo.columnInfos)
+			log.Printf("src:\n%s\n", a_table.columnInfos)
+			log.Printf("dst:\n%s\n", dstinfo.columnInfos)
 		}
 	}
 	if driver != "postgres" {
@@ -1442,6 +1451,18 @@ func CheckTableOnDestination(driver string, adbConn *sql.Conn, a_table MetadataT
 		cnt_empty++
 	}
 	return err_msg, err_msg != "", cnt_empty
+}
+
+// ------------------------------------------------------------------------------------------
+func PopulateDstSchema(lst_tab *[]aTable, lst_schemas arrayFlags, lst_dst_schemas arrayFlags) {
+	for i, s := range lst_schemas {
+		ds := lst_dst_schemas[i]
+		for j := 0; j < len(*lst_tab); j++ {
+			if (*lst_tab)[j].dbName == s {
+				(*lst_tab)[j].dstDbName = ds
+			}
+		}
+	}
 }
 
 // ------------------------------------------------------------------------------------------
@@ -3482,6 +3503,8 @@ func main() {
 	// ------------
 	var arg_schemas arrayFlags
 	flag.Var(&arg_schemas, "schema", "schema(s) of tables to dump")
+	var arg_dst_schemas arrayFlags
+	flag.Var(&arg_dst_schemas, "dst-schema", "schema of table(s) on the destination database")
 	// ------------
 	var arg_tables2dump arrayFlags
 	flag.Var(&arg_tables2dump, "table", "table to dump")
@@ -3529,6 +3552,18 @@ func main() {
 		log.Printf("can not specify multiple schemas with a list of tables")
 		flag.Usage()
 		os.Exit(5)
+	}
+	if len(arg_schemas) > 1 {
+		sort.Strings(arg_schemas)
+		pv := arg_schemas[0]
+		for _, v := range arg_schemas[1:] {
+			if v == pv {
+				log.Printf("duplicate value in schema")
+				flag.Usage()
+				os.Exit(4)
+			}
+			pv = v
+		}
 	}
 	if len(*arg_dumpfile) == 0 && *arg_dumpmode != "cpy" {
 		log.Printf("the parameter dumpfile is empty")
@@ -3583,6 +3618,23 @@ func main() {
 		flag.Usage()
 		os.Exit(19)
 	}
+	if arg_dst_schemas != nil && len(arg_dst_schemas) != len(arg_schemas) {
+		log.Printf("number of schemas must be identical  number of dst-schema")
+		flag.Usage()
+		os.Exit(20)
+	}
+	if len(arg_dst_schemas) > 1 {
+		sort.Strings(arg_dst_schemas)
+		pv := arg_dst_schemas[0]
+		for _, v := range arg_dst_schemas[1:] {
+			if v == pv {
+				log.Printf("duplicate value in dst-schema")
+				flag.Usage()
+				os.Exit(20)
+			}
+			pv = v
+		}
+	}
 	mode_trace = *arg_trace
 	if mode_trace {
 		mode_debug = true
@@ -3621,6 +3673,10 @@ func main() {
 	var cntBrowser int = *arg_browser_parr
 	var cntReader int = *arg_db_parr
 	// ----------------------------------------------------------------------------------
+	if len(arg_dst_schemas) == 0 {
+		arg_dst_schemas = arg_schemas
+	}
+	// ----------------------------------------------------------------------------------
 	var conSrc []*sql.Conn
 	var conDst []*sql.Conn
 	var dbSrc *sql.DB
@@ -3636,7 +3692,7 @@ func main() {
 	}
 	if *arg_dumpmode == "cpy" {
 		if *arg_dst_db_driver == "mysql" {
-			dbDst, conDst, _ = GetDstMysqlConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_schemas[0])
+			dbDst, conDst, _ = GetDstMysqlConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, arg_dst_schemas[0])
 		}
 		if *arg_dst_db_driver == "mssql" {
 			dbDst, conDst, _ = GetDstMsSqlConnections(*arg_dst_db_host, *arg_dst_db_port, *arg_dst_db_user, *arg_dst_db_pasw, *arg_dst_db_parr, *arg_dst_db_name)
@@ -3653,6 +3709,9 @@ func main() {
 		for _, t := range arg_tables2dump {
 			tables2dump = append(tables2dump, aTable{dbName: arg_schemas[0], tbName: t})
 		}
+	}
+	if *arg_dumpmode == "cpy" {
+		PopulateDstSchema(&tables2dump, arg_schemas, arg_dst_schemas)
 	}
 	if mode_debug {
 		log.Print(tables2dump)

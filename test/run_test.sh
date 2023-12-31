@@ -39,7 +39,6 @@ do
 	exit 203
 done
 # ------------------------------------------------------------------------------------------
-
 NEED_SUDO=""
 docker ps -a -q >/dev/null 2>&1 || {
     echo can not connect to docker
@@ -84,11 +83,17 @@ truncate_tables() {
 	    ${DCK_MYSQL} --port 4900 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	    ${DCK_MYSQL} --port 4000 test   -e "truncate table $T ;" >/dev/null 2>&1 &
 	    ${DCK_PSQL}  --port 8100        -c "truncate table foobar.$T ;" >/dev/null 2>&1 &
+	    ${DCK_PSQL}  --port 8100        -c "truncate table test.$T ;" >/dev/null 2>&1 &
 	    ${DCK_PSQL}  --port 8000        -c "truncate table barfoo.$T ;" >/dev/null 2>&1 &
+	    ${DCK_PSQL}  --port 8000        -c "truncate table test.$T ;" >/dev/null 2>&1 &
 	    # shellcheck disable=SC2086
 	    ${DCK_MSSQL},8300               -Q "truncate table foobar.$T  " >/dev/null 2>&1 &
 	    # shellcheck disable=SC2086
+	    ${DCK_MSSQL},8300               -Q "truncate table test.$T  " >/dev/null 2>&1 &
+	    # shellcheck disable=SC2086
 	    ${DCK_MSSQL},8200               -Q "truncate table barfoo.$T  " >/dev/null 2>&1 &
+	    # shellcheck disable=SC2086
+	    ${DCK_MSSQL},8200               -Q "truncate table test.$T  " >/dev/null 2>&1 &
 	    wait
 	done
     )
@@ -249,6 +254,14 @@ echo "Test  31: ok ( $? )"
 # test 32 , db is not specified for dst mssql
 eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -dst-driver mssql -table client_info -table sensor_tag -schema barfoo -guessprimarykey --dumpmode cpy              $DEBUG_CMD " && echo "Test  32: failure" && exit 32
 echo "Test  32: ok ( $? )"
+
+# test 33 , dmode cpy duplicate schema 
+eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar --alltables -schema barfoo -schema barfoo -guessprimarykey            $DEBUG_CMD " && echo "Test  33: failure" && exit 33
+echo "Test  33: ok ( $? )"
+
+# test 34 , dmode cpy duplicate dst-schema
+eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar --alltables -schema barfoo -schema foobar -guessprimarykey --dumpmode cpy  -dst-schema foobar -dst-schema foobar         $DEBUG_CMD " && echo "Test  34: failure" && exit 34
+echo "Test  34: ok ( $? )"
 
 # test 100  dump client_info ticket_tag sql insertsize 1 => count lines and compare with mysqldump
 TMPDIR_T100=$(mktemp -d )
@@ -498,20 +511,120 @@ then
 fi
 echo "Test 106: ok ( $? )"
 
+# test 107  copy small tables foobar  into mysql / test
+TMPDIR=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -guessprimarykey --dumpmode cpy -dst-port=4900 -dst-schema test -dst-user=apptest -dst-pwd=Test-12345+abc      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 107: failure" ; exit 107 ; }
+FAIL=0
+for T in $LIST_SMALL_TABLES
+do
+    CNT=$(${DCK_MYSQL} --port 4900 test -e "select count(*) as cnt from $T \G" 2>/dev/null | sed 's/^cnt: //p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+    ${DCK_MYSQL_DUMP} --port 4900 --skip-add-drop-table --skip-add-locks  --skip-disable-keys --no-create-info  --no-tablespaces --skip-extended-insert --compact test "$T"  2>/dev/null  | grep -a -v '^$' >  "${TMPDIR}/mysqldump_test_${T}.sql" 2>/dev/null
+done
+for T in $LIST_SMALL_TABLES
+do
+    CNT_LINES_SRC=$(grep -c '^INSERT' "${TMPDIR_T100}/mysqldump_foobar_${T}".sql )
+    CNT_LINES_DST=$(grep -c '^INSERT' "${TMPDIR}/mysqldump_test_${T}".sql )
+    if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
+    then
+	FAIL=$((FAIL+1))
+    else
+	DIFF_RES=$(mktemp)
+	diff -u <( sort "${TMPDIR_T100}/mysqldump_foobar_${T}".sql ) <( sort "${TMPDIR}/mysqldump_test_${T}".sql )  > "$DIFF_RES"
+	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
+	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
+	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
+	then
+	    FAIL=$((FAIL+1))
+	else
+	    rm "$DIFF_RES"
+	fi
+    fi
+done
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 107: failure ($FAIL)"
+    echo "info are in $TMPDIR"
+    echo "info T100 are in ${TMPDIR_T100}"
+    exit 107
+fi
+echo "Test 107: ok ( $? )"
+rm -rf "$TMPDIR"
+
+# test 108 cpy small tables from foobar into postgres / test 
+eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -guessprimarykey --dumpmode cpy -dst-port=8100 -dst-schema test -dst-user=apptest -dst-pwd=Test-12345+abc -dst-driver postgres -dst-db paradump  $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  $DEBUG_CMD " || { echo "Test 108: failure" ; exit 108 ; }
+FAIL=0
+for T in $LIST_SMALL_TABLES
+do
+    CNT=$(${DCK_PSQL} --port 8100 -c "select 'cnt',count(*) as cnt from test.$T ;" 2>/dev/null | sed 's/^cnt *: *\([^ ]\)/\1/p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8100  -c "select 'cnt_match',count(*) as cnt_match  from test.ticket_tag where upper(encode(convert_to(label,'UTF8'),'hex')) = label_postgres_hex_u8 ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
+then
+    FAIL=$((FAIL+32))
+fi
+CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8100  -c "select 'cnt_match',count(*) as cnt_match  from test.account_metadatas where metasha256 = encode(sha256(metavalue),'hex') ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_account_metadatas" )" ]]
+then
+    FAIL=$((FAIL+64))
+fi
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 108: failure ($FAIL)" && exit 108
+fi
+echo "Test 108: ok ( $? )"
+
+# test 109 cpy small tables from foobar into mssql / test
+eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -guessprimarykey --dumpmode cpy -dst-port=8300 -dst-schema test -dst-user=apptest -dst-pwd=Test-12345+abc -dst-driver mssql    -dst-db paradump   $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )     $DEBUG_CMD " || { echo "Test 109: failure" ; exit 109 ; }
+FAIL=0
+for T in $LIST_SMALL_TABLES
+do
+    # shellcheck disable=SC2086
+    CNT=$(${DCK_MSSQL},8300  -Q "select 'cnt',count(*) as cnt  from test.$T "  2>/dev/null | sed 's/^cnt *\([^ ]\)/\1/p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+# shellcheck disable=SC2086
+CNT_TAG_MATCH_U8=$(${DCK_MSSQL},8300  -Q "select 'cnt_match',count(*) as cnt_match  from test.ticket_tag where convert(varchar(max),CAST(label as varbinary(256)),2) = label_hex_u16le "  2>/dev/null | sed 's/^cnt_match *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
+then
+    FAIL=$((FAIL+32))
+fi
+# shellcheck disable=SC2086
+CNT_TAG_MATCH_U8=$(${DCK_MSSQL},8300  -Q "select 'cnt_match',count(*) as cnt_match  from test.account_metadatas where metasha256 = LOWER(CONVERT(VARCHAR(MAX),HASHBYTES('SHA2_256',metavalue),2)) "  2>/dev/null | sed 's/^cnt_match *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_account_metadatas" )" ]]
+then
+    FAIL=$((FAIL+64))
+fi
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 109: failure ($FAIL)" && exit 109
+fi
+echo "Test 109: ok ( $? )"
+
 if [ $SMALL_TESTS_ONLY -eq 1 ]
 then
     exit 0
 fi
 truncate_tables
 
-# test 110  dump whole database csv with no header => count lines
-TMPDIR_T110=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 110: failure" ; exit 110 ; }
+# test 115  dump whole database csv with no header => count lines
+TMPDIR_T115=$(mktemp -d )
+eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode csv --dumpheader=false -dumpfile '${TMPDIR_T115}/dump_%d_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 115: failure" ; exit 115 ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
     CSV_CNT=0
-    for F in "${TMPDIR_T110}/dump_foobar_${T}"_*.csv
+    for F in "${TMPDIR_T115}/dump_foobar_${T}"_*.csv
     do
 	if [[ -s "$F" ]]
 	then
@@ -525,15 +638,15 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 110: failure ($FAIL)"
-    echo "info are in $TMPDIR_T110"
-    exit 110
+    echo "Test 115: failure ($FAIL)"
+    echo "info are in $TMPDIR_T115"
+    exit 115
 fi
-echo "Test 110: ok ( $? )"
+echo "Test 115: ok ( $? )"
 
-# test 111  dump whole database csv => count lines
+# test 116  dump whole database csv => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 111: failure" ; exit 111 ; }
+eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 116: failure" ; exit 116 ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -552,14 +665,14 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 111: failure ($FAIL)" && exit 111
+    echo "Test 116: failure ($FAIL)" && exit 116
 fi
-echo "Test 111: ok ( $? )"
+echo "Test 116: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 112  dump whole database csv / zstd => count lines
+# test 117  dump whole database csv / zstd => count lines
 TMPDIR=$(mktemp -d )
-eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' -dumpcompress zstd $DEBUG_CMD " || { echo "Test 112: failure" ; exit 112 ; }
+eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode csv -dumpfile '${TMPDIR}/dump_%d_%t_%p%m%z' -dumpcompress zstd $DEBUG_CMD " || { echo "Test 117: failure" ; exit 117 ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
@@ -578,9 +691,9 @@ do
 done
 if [[ "$FAIL" -gt 0 ]]
 then
-    echo "Test 112: failure ($FAIL)" && exit 112
+    echo "Test 117: failure ($FAIL)" && exit 117
 fi
-echo "Test 112: ok ( $? )"
+echo "Test 117: ok ( $? )"
 rm -rf "$TMPDIR"
 
 # test 121  dump whole database sql => count lines
@@ -685,18 +798,18 @@ fi
 echo "Test 130: ok ( $? )"
 
 # test 131  dump whole database csv => count lines
-eval "$BINARY  -port 4900 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T110}/dump_%d_copy_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
+eval "$BINARY  -port 4900 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey -dumpmode csv -dumpheader=false -dumpfile '${TMPDIR_T115}/dump_%d_copy_%t_%p%m%z' $DEBUG_CMD " || { echo "Test 131: failure" ; exit 131  ; }
 FAIL=0
 for T in $LIST_TABLES_CSV
 do
     DIFF_RES=$(mktemp)
-    CNT_LINES_SRC=$(cat "${TMPDIR_T110}/dump_foobar_${T}"_*.csv | wc -l )
-    CNT_LINES_DST=$(cat "${TMPDIR_T110}/dump_foobar_copy_${T}"_*.csv | wc -l )
+    CNT_LINES_SRC=$(cat "${TMPDIR_T115}/dump_foobar_${T}"_*.csv | wc -l )
+    CNT_LINES_DST=$(cat "${TMPDIR_T115}/dump_foobar_copy_${T}"_*.csv | wc -l )
     if [[ "$CNT_LINES_SRC" -ne "$CNT_LINES_DST" ]]
     then
 	FAIL=$((FAIL+1))
     else
-	diff -u <( sort "${TMPDIR_T110}/dump_foobar_${T}"_*.csv ) <( sort "${TMPDIR_T110}/dump_foobar_copy_${T}"_*.csv )  > "$DIFF_RES"
+	diff -u <( sort "${TMPDIR_T115}/dump_foobar_${T}"_*.csv ) <( sort "${TMPDIR_T115}/dump_foobar_copy_${T}"_*.csv )  > "$DIFF_RES"
 	CNT_PLUS=$( grep -c '^+'  "$DIFF_RES" )
 	CNT_MINUS=$( grep -c '^-'  "$DIFF_RES" )
 	if [[ "$CNT_PLUS" -gt 0 || "$CNT_MINUS" -gt 0 ]]
@@ -826,5 +939,5 @@ echo "Test 150: ok ( $? )"
 
 
 rm -rf "$TMPDIR_T100"
-rm -rf "$TMPDIR_T110"
+rm -rf "$TMPDIR_T115"
 rm -rf "$TMPDIR_T121"

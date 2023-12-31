@@ -24,7 +24,7 @@ done
 SRC_DB="percona:ps-5.6.51=mysql_source=1"
 TGT_DB="mysql/mysql-server:8.0.31=mysql_target=2"
 SRC_PG="postgres:10.23-bullseye=postgres_source=3"
-TGT_PG="postgres:13.10-bullseye=postgres_target=4"
+TGT_PG="postgres:15.5-bullseye=postgres_target=4"
 SRC_MS="mcr.microsoft.com/mssql/server:2019-latest=mssql_source=5"
 TGT_MS="mcr.microsoft.com/mssql/server:2022-latest=mssql_target=6"
 
@@ -188,20 +188,35 @@ then
 	printf "container %s listen on %s is READY\n" "$NAM" "$PRT"
 	if [[ "$SFT" = "mysql" ]]
 	then
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%'; \"  "
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%'; \"  "
 	    [ "$PRT" -ne 4000 ] && $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"create user 'root'@'%' identified by 'Test+12345' ; \"  "
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT all privileges on *.* TO 'root'@'%' ; \"  "
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT RELOAD on *.* TO 'foobar'@'%' ; \"  "
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ; \"  "
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_stats_persistent_sample_pages = 2048000 ; \"  "
-	    $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c "/usr/bin/mysql  -u root -h localhost mysql -e \"set global innodb_flush_log_at_trx_commit = 2 ; \"  "
+	    (
+		cat <<-'EOF'
+		create database test   ; GRANT ALL PRIVILEGES ON test.*   TO 'foobar'@'%';
+		create database barfoo ; GRANT ALL PRIVILEGES ON barfoo.* TO 'foobar'@'%';
+		GRANT all privileges on *.* TO 'root'@'%' ;
+		GRANT RELOAD on *.* TO 'foobar'@'%' ;
+		GRANT REPLICATION CLIENT on *.* TO 'foobar'@'%' ;
+		set global innodb_stats_persistent_sample_pages = 2048000 ;
+		set global innodb_flush_log_at_trx_commit = 2 ;
+		create user 'apptest'@'%' identified by 'Test-12345+abc' ;
+		GRANT SELECT,INSERT,UPDATE,DELETE on test.* TO 'apptest'@'%' ;
+		EOF
+	    ) | $NEED_SUDO docker exec  -e MYSQL_PWD=Test+12345 -i "${NAM}"  sh -c '/usr/bin/mysql  -u root -h localhost mysql '
 	fi
 	if [[ "$SFT" = "postgres" ]]
 	then
+	    (
+		for DB in foobar barfoo test
+		do
+		    echo " create schema $DB ; "
+		done
+		cat <<-'EOF'
+		create user apptest with password 'Test-12345+abc' ;
+		EOF
+	    ) | $NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump
+	    (
 	    if [[ "$NAM" = "postgres_source" ]]
 	    then
-	        (
 		cat <<-'EOF'
 		CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -209,12 +224,12 @@ then
 		    SELECT digest($1, 'sha256') 
 		$$ LANGUAGE SQL STRICT IMMUTABLE;
 		EOF
-		) | $NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump
+	    else
+		cat <<-'EOF'
+		GRANT SET ON PARAMETER session_replication_role TO apptest ;
+		EOF
 	    fi
-	    for DB in foobar barfoo test
-	    do
-		$NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump -c " create schema $DB ; "
-	    done
+	    ) | $NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump
 	fi
 	if [[ "$SFT" = "mssql" ]]
 	then
@@ -224,9 +239,13 @@ then
 		GO
 		create login admin with password = 'Test+12345'
 		GO
+		create login apptest with password = 'Test-12345+abc'
+		GO
 		USE paradump
 		GO
 		create user admin for login admin
+		GO
+		create user apptest for login apptest
 		GO
 		GRANT  CREATE FUNCTION, CREATE PROCEDURE, CREATE RULE, CREATE TABLE, CREATE VIEW TO admin
 		GO
@@ -235,6 +254,8 @@ then
 		CREATE SCHEMA barfoo AUTHORIZATION admin
 		GO
 		CREATE SCHEMA test AUTHORIZATION admin
+		GO
+		GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA :: test TO apptest;
 		GO
 		ALTER DATABASE paradump SET DELAYED_DURABILITY = FORCED
 		GO
@@ -275,6 +296,15 @@ then
 	    done
 	    wait
 	done
+	if [[ "$SFT" = "postgres" ]]
+	then
+	    (
+		cat <<-'EOF'
+		GRANT SELECT,INSERT,UPDATE,DELETE on ALL TABLES IN SCHEMA test  TO  apptest ;
+		GRANT  USAGE  on schema test to apptest ;
+		EOF
+	    ) | $NEED_SUDO docker exec -i "${NAM}"  psql  -q -h localhost -U admin -d paradump
+	fi
     done
 fi
 #------------------------------------------------------------------------------------------
