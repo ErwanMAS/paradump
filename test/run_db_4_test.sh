@@ -614,3 +614,14 @@ then
 fi    
 echo "CHECK DATA in $CMP_FILE"
 #
+# 		 select length(label),*,upper(encode(convert_to(label,'UTF8'),'hex'))  from foobar.sensor_tag where id=2051 ;
+#                select length(label),e.*,hex(cast(convert(label using utf8mb4)  as binary)) from foobar.sensor_tag e where id=2051 ;
+#
+# MySQL translates 0x81 to Unicode 0x0081, 0x8d to 0x008d, 0x8f to 0x008f, 0x90 to 0x0090, and 0x9d to 0x009d
+# 
+#                  C281                    c28d            C28F            C290                C29D
+# 
+# select len(label),*,convert(varchar(max),CAST(label as varbinary(256)),2)  from foobar.sensor_tag where hex_label <> convert(varchar(max),CAST(label as varbinary(256)),2) ;
+#
+# invalid character => ef bf bd
+#

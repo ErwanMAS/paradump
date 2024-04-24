@@ -4,7 +4,7 @@ cd "$(dirname "$0")" || exit 200
 
 exec &> >( while read -r L ; do echo "$(date '+%b %d %T')" "$L" ; done )
 
-BINARY=../src/paradump
+BINARY=../bin/paradump
 # ------------------------------------------------------------------------------------------
 sleep_1_sec() {
     sleep 1

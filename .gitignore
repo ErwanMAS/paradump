@@ -5,7 +5,8 @@
 *.so
 *.dylib
 
-src/paradump
+bin/paradump
+bin/parasync
 
 # Test binary, built with `go test -c`
 *.test
