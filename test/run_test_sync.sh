@@ -106,7 +106,7 @@ fi
 echo "Test 200: ok ( $? )"
 
 # ------------------------------------------------------------------------------------------
-# test 201  copy small tables sql => count rows / foobar vs barfoo
+# test 201 [mysql:mysql] copy small tables sql => count rows / foobar.* => barfoo.*
 TMPDIR=$(mktemp -d )
 eval "$BINARY  -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -guessprimarykey -dst-schema barfoo -dst-port=4900 -dst-user=foobar -dst-pwd=Test+12345      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  --statsfile ${TMPDIR}/stat_activity_table --writer-no-delete --writer-no-update --writer-no-insert  $DEBUG_CMD " || { echo "Test 201: failure" ; exit 201 ; }
 FAIL=0
@@ -154,7 +154,7 @@ fi
 echo "Test 201: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 202  copy small tables sql => count rows / barfoo vs foobar
+# test 202 [mysql:mysql] copy small tables sql => count rows / barfoo.* => foobar.*
 TMPDIR=$(mktemp -d )
 eval "$BINARY  -dst-port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema barfoo -dst-schema foobar -guessprimarykey -port=4900 -dst-user=foobar -dst-pwd=Test+12345      $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) --statsfile ${TMPDIR}/stat_activity_table --writer-no-delete --writer-no-update --writer-no-insert $DEBUG_CMD " || { echo "Test 202: failure" ; exit 202 ; }
 FAIL=0
@@ -202,7 +202,7 @@ fi
 echo "Test 202: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 203 cpy small tables into postgres / foobar vs barfoo
+# test 203 [mysql:pgsql] copy small tables sql => count rows / foobar.* => barfoo.
 TMPDIR=$(mktemp -d )
 eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -dst-schema barfoo -guessprimarykey -dst-port=8100 -dst-user=admin -dst-pwd=Test+12345 -dst-driver postgres -dst-db paradump  $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) --statsfile ${TMPDIR}/stat_activity_table --writer-no-delete --writer-no-update --writer-no-insert $DEBUG_CMD " || { echo "Test 203: failure" ; exit 203 ; }
 FAIL=0
@@ -238,7 +238,7 @@ fi
 echo "Test 203: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 204 cpy small tables into postgres / barfoo vs foobar
+# test 204 [mysql:pgsql] copy small tables sql => count rows / barfoo.* => foobar.*
 TMPDIR=$(mktemp -d )
 eval "$BINARY -port 4900 -pwd Test+12345 -user foobar  -guessprimarykey -schema barfoo -dst-schema foobar -guessprimarykey -dst-port=8000 -dst-user=admin -dst-pwd=Test+12345 -dst-driver postgres -dst-db paradump  $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  --statsfile ${TMPDIR}/stat_activity_table --writer-no-delete --writer-no-update --writer-no-insert $DEBUG_CMD " || { echo "Test 204: failure" ; exit 204 ; }
 FAIL=0
@@ -274,7 +274,7 @@ fi
 echo "Test 204: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 205 cpy small tables into mssql / foobar vs barfoo
+# test 205 [mysql:mssql] copy small tables sql => count rows / foobar.* => barfoo.* 
 TMPDIR=$(mktemp -d )
 eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -dst-schema barfoo -guessprimarykey -dst-port=8300 -dst-user=admin -dst-pwd=Test+12345 -dst-driver mssql    -dst-db paradump   $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' ) --statsfile ${TMPDIR}/stat_activity_table --writer-no-delete --writer-no-update --writer-no-insert $DEBUG_CMD " || { echo "Test 205: failure" ; exit 205 ; }
 FAIL=0
@@ -313,7 +313,7 @@ fi
 echo "Test 205: ok ( $? )"
 rm -rf "$TMPDIR"
 
-# test 206 cpy small tables into mssql / barfoo vs foobar 
+# test 206 [mysql:mssql] copy small tables sql => count rows / barfoo.* => foobar.*
 TMPDIR=$(mktemp -d )
 eval "$BINARY -port 4900 -pwd Test+12345 -user foobar  -guessprimarykey -schema barfoo -dst-schema foobar -guessprimarykey -dst-port=8200 -dst-user=admin -dst-pwd=Test+12345 -dst-driver mssql    -dst-db paradump   $( echo "$LIST_SMALL_TABLES"  | xargs -n1 printf -- '-table %s ' )  --statsfile ${TMPDIR}/stat_activity_table --writer-no-delete --writer-no-update --writer-no-insert   $DEBUG_CMD " || { echo "Test 206: failure" ; exit 206 ; }
 FAIL=0
