@@ -53,7 +53,8 @@ docker ps -a -q >/dev/null 2>&1 || {
 DCK_MYSQL="$NEED_SUDO docker run --rm --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysql -u foobar -pTest+12345 -h 127.0.0.1 "
 DCK_MYSQL_DUMP="$NEED_SUDO docker run --rm --network=host -i bitnami/mysql:5.7.41  /opt/bitnami/mysql/bin/mysqldump -u foobar -pTest+12345 -h 127.0.0.1 "
 DCK_PSQL="$NEED_SUDO docker run --rm --network=host -e PGPASSWORD=Test+12345 -i bitnami/postgresql:11-debian-11 psql -h 127.0.0.1 -U admin -d paradump -qAt -F: "
-DCK_MSSQL="$NEED_SUDO docker run --rm --network=host      -i mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools/bin/sqlcmd -U admin -d paradump -P Test+12345   -S 127.0.0.1"
+# must be termiated by the server IP so we can use the notation <IP>,<PORT> later 
+DCK_MSSQL="$NEED_SUDO docker run --rm --network=host      -i mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools18/bin/sqlcmd -U admin -d paradump -P Test+12345  -C -S 127.0.0.1"
 # ------------------------------------------------------------------------------------------
 # tables that have binary or line return that will prevent to use CSV
 #
@@ -908,12 +909,40 @@ then
 fi
 echo "Test 140: ok ( $? )"
 
+# test 141  copy whole database sql into postgress => count rows in barfoo / check ticket_tag.label , account_metadatas.metavalue
+eval "$BINARY -port 4900 -pwd Test+12345 -user foobar  -guessprimarykey -schema barfoo -alltables -guessprimarykey --dumpmode cpy -dst-port=8000 -dst-user=admin -dst-pwd=Test+12345 -dst-driver postgres -dst-db paradump        $DEBUG_CMD " || { echo "Test 141: failure" ; exit 141 ; }
+FAIL=0
+for T in $LIST_TABLES
+do
+    CNT=$(${DCK_PSQL} --port 8000 -c "select 'cnt',count(*) as cnt from barfoo.$T ;" 2>/dev/null | sed 's/^cnt *: *\([^ ]\)/\1/p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8000  -c "select 'cnt_match',count(*) as cnt_match  from barfoo.ticket_tag where upper(encode(convert_to(label,'UTF8'),'hex')) = label_postgres_hex_u8 ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
+then
+    FAIL=$((FAIL+32))
+fi
+CNT_TAG_MATCH_U8=$(${DCK_PSQL} --port 8000  -c "select 'cnt_match',count(*) as cnt_match  from barfoo.account_metadatas where metasha256 = encode(sha256(metavalue),'hex') ;"  2>/dev/null | sed 's/^cnt_match *: *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_account_metadatas" )" ]]
+then
+    FAIL=$((FAIL+64))
+fi
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 141: failure ($FAIL)" && exit 141
+fi
+echo "Test 141: ok ( $? )"
+
 # test 150  copy whole database sql into mssql => count rows in foobar / check ticket_tag.label , account_metadatas.metavalue
 eval "$BINARY -port 4000 -pwd Test+12345 -user foobar  -guessprimarykey -schema foobar -alltables -guessprimarykey --dumpmode cpy -dst-port=8300 -dst-user=admin -dst-pwd=Test+12345 -dst-driver mssql    -dst-db paradump        $DEBUG_CMD " || { echo "Test 150: failure" ; exit 150 ; }
 FAIL=0
 for T in $LIST_TABLES
 do
-    CNT=$(${DCK_PSQL} --port 8100 -c "select 'cnt',count(*) as cnt from foobar.$T ;" 2>/dev/null | sed 's/^cnt *: *\([^ ]\)/\1/p;d')
+    # shellcheck disable=SC2086
+    CNT=$(${DCK_MSSQL},8300  -Q "select 'cnt',count(*) as cnt  from foobar.$T ;" 2>/dev/null | sed 's/^cnt *\([^ ]\)/\1/p;d')
     if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
     then
 	FAIL=$((FAIL+1))
@@ -936,6 +965,36 @@ then
     echo "Test 150: failure ($FAIL)" && exit 150
 fi
 echo "Test 150: ok ( $? )"
+
+# test 151  copy whole database sql into mssql => count rows in barfoo / check ticket_tag.label , account_metadatas.metavalue
+eval "$BINARY -port 4900 -pwd Test+12345 -user foobar  -guessprimarykey -schema barfoo -alltables -guessprimarykey --dumpmode cpy -dst-port=8200 -dst-user=admin -dst-pwd=Test+12345 -dst-driver mssql    -dst-db paradump        $DEBUG_CMD " || { echo "Test 151: failure" ; exit 151 ; }
+FAIL=0
+for T in $LIST_TABLES
+do
+    # shellcheck disable=SC2086
+    CNT=$(${DCK_MSSQL},8200  -Q "select 'cnt',count(*) as cnt  from barfoo.$T ;" 2>/dev/null | sed 's/^cnt *\([^ ]\)/\1/p;d')
+    if [[ "$CNT" -ne "$( eval "echo \$CNT_$T" )" ]]
+    then
+	FAIL=$((FAIL+1))
+    fi
+done
+# shellcheck disable=SC2086
+CNT_TAG_MATCH_U8=$(${DCK_MSSQL},8200  -Q "select 'cnt_match',count(*) as cnt_match  from barfoo.ticket_tag where convert(varchar(max),CAST(label as varbinary(256)),2) = label_hex_u16le "  2>/dev/null | sed 's/^cnt_match *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_ticket_tag" )" ]]
+then
+    FAIL=$((FAIL+32))
+fi
+# shellcheck disable=SC2086
+CNT_TAG_MATCH_U8=$(${DCK_MSSQL},8200  -Q "select 'cnt_match',count(*) as cnt_match  from barfoo.account_metadatas where metasha256 = LOWER(CONVERT(VARCHAR(MAX),HASHBYTES('SHA2_256',metavalue),2)) "  2>/dev/null | sed 's/^cnt_match *\([^ ]\)/\1/p;d'  )
+if [[ "$CNT_TAG_MATCH_U8" -ne "$( eval "echo \$CNT_account_metadatas" )" ]]
+then
+    FAIL=$((FAIL+64))
+fi
+if [[ "$FAIL" -gt 0 ]]
+then
+    echo "Test 151: failure ($FAIL)" && exit 151
+fi
+echo "Test 151: ok ( $? )"
 
 
 rm -rf "$TMPDIR_T100"

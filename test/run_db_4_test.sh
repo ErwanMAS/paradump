@@ -178,7 +178,7 @@ then
 		fi
 		if [[ "$SFT" = "mssql" ]]
 		then
-		    READY_DB=$( $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Test+12345' -Q "select 'OK_CONNECTED' " 2>/dev/null | grep -c OK_CONNECTED )
+		    READY_DB=$( $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools18/bin/sqlcmd -S localhost -C  -U SA -P 'Test+12345' -Q "select 'OK_CONNECTED' " 2>/dev/null | grep -c OK_CONNECTED )
 		fi
 		sleep 2
 		T=$(( T - 1 ))
@@ -260,7 +260,7 @@ then
 		ALTER DATABASE paradump SET DELAYED_DURABILITY = FORCED
 		GO
 		EOF
-	    ) | $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Test+12345'
+	    ) | $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools18/bin/sqlcmd -S localhost -C  -U SA -P 'Test+12345'
 	fi
 	for KIND in tab viw
 	do
@@ -288,7 +288,7 @@ then
 				    cat "$F"
 				    echo "GO"
 				    echo EOF
-				} | bash | $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools/bin/sqlcmd -S localhost -d paradump -U admin -P 'Test+12345'
+				} | bash | $NEED_SUDO docker exec -i "${NAM}"  /opt/mssql-tools18/bin/sqlcmd -S localhost -C -d paradump -U admin -P 'Test+12345'
 			    fi
 			) 2>&1 | tail -100
 		    fi
@@ -338,7 +338,7 @@ then
 	    if [[ "$ENGINE" = "mssql" ]]
 	    then
 		ENV_CMD="FOOBAR=foobar"
-		CNT_EXE="/opt/mssql-tools/bin/sqlcmd -S localhost -d paradump -U admin -P Test+12345"
+		CNT_EXE="/opt/mssql-tools18/bin/sqlcmd -S localhost -C -d paradump -U admin -P Test+12345"
 	    fi
 	    for D in $PAT_FILES
 	    do
@@ -472,7 +472,7 @@ then
 	ALTER DATABASE paradump SET DELAYED_DURABILITY = DISABLED
 	GO
 	EOF
-	) | $NEED_SUDO docker exec -i $CONTAINER_DST  /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Test+12345'
+	) | $NEED_SUDO docker exec -i $CONTAINER_DST  /opt/mssql-tools18/bin/sqlcmd -S localhost -C  -U SA -P 'Test+12345'
     done
     echo "done"
 fi
@@ -518,7 +518,7 @@ do
 	if [[ "$ENGINE" = "mssql" ]]
 	then
 	    ENV_CMD="FOOBAR=foobar"
-	    CNT_EXE="/opt/mssql-tools/bin/sqlcmd -S localhost -d paradump -U admin -P Test+12345"
+	    CNT_EXE="/opt/mssql-tools18/bin/sqlcmd -S localhost -C -d paradump -U admin -P Test+12345"
 	fi
 	for D in init_*.sql.zst
 	do
@@ -581,10 +581,10 @@ do
 	if [[ "$ENGINE" = "mssql" ]]
 	then
 	    ENV_CMD="FOOBAR=foobar"
-	    CNT_EXE="/opt/mssql-tools/bin/sqlcmd -S localhost -d paradump -U admin -P Test+12345"
+	    CNT_EXE="/opt/mssql-tools18/bin/sqlcmd -S localhost -C -d paradump -U admin -P Test+12345"
 	fi
 	for D in mysql:ticket_tag:"label_hex_u8 <> hex(cast(convert(label using utf8mb4)  as binary))" \
-		 mysql:ticket_tag:"label_hex_u16 <> hex(cast(convert(label using utf16)  as binary))" \
+		 mysql:ticket_tag:"label_hex_u16le <> hex(cast(convert(label using utf16le)  as binary))" \
 		 mysql:ticket_tag:"label_hex_l1 <> hex(cast(convert(label using latin1 )  as binary))" \
 		 postgres:ticket_tag:"upper(encode(convert_to(label,'UTF8'),'hex')) <> label_postgres_hex_u8" \
 		 mssql:ticket_tag:"convert(varchar(max),CAST(label as varbinary(256)),2) <> label_hex_u16le" \
